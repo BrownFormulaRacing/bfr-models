@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.io import loadmat, savemat
 from scipy.optimize import least_squares
 from pathlib import Path
+from .pacejka_model_helper import load_data
 
 TYRE_DATA_PATH = Path("../../data/tyres/RunData_DriveBrake_Matlab_SI_Round9").expanduser().resolve()
 
@@ -12,91 +13,18 @@ TYRE_DATA_PATH = Path("../../data/tyres/RunData_DriveBrake_Matlab_SI_Round9").ex
 TIRE_ID_SUBSTRINGS = ["43100", "18.0x6.0", "7 inch rim"]
 
 FZ_MIN, FZ_MAX = 100.0, 1300.0   # [N] valid load window
-SR_MAX = 0                     # [-] valid slip ratio window (unitless, not degrees)
-SR_MIN = -0.2
+SL_MAX = 0                     # [-] valid slip ratio window (unitless, not degrees)
+SL_MIN = -0.2
 PRESSURE_TARGET = 83.0           # [kPa]
 PRESSURE_TOL = 5.0               # [kPa]
-DECIMATE = 3                     # keep every Nth sample after filtering
+DECIMATE = 1                     # keep every Nth sample after filtering
 
-_data_cache = None
 _coeffs_cache = None
 
-
-def _mat_str(val):
-    """Coerce a loadmat string field (char array / object array) to a plain str."""
-    arr = np.asarray(val)
-    return str(arr.item()).strip() if arr.size == 1 else str(arr).strip()
-
-
-def load_data():
-    """
-    Load and filter all matching TTC drive/brake runs from TYRE_DATA_PATH.
-    Returns a dict of 1D numpy arrays: SR [-], FX [N], FZ [N, positive], IA [deg].
-    """
-    global _data_cache
-    if _data_cache is not None:
-        return _data_cache
-
-    run_files = sorted(glob.glob(os.path.join(TYRE_DATA_PATH, "B2356run*.mat")))
-    if not run_files:
-        raise FileNotFoundError(f"no B2356run*.mat files found in '{TYRE_DATA_PATH}'")
-
-    sr_list, fx_list, fz_list, ia_list, p_list = [], [], [], [], []
-
-    print("loading hoosier 43100 18.0x6.0-10 r20 (7 inch rim) runs...")
-    for fpath in run_files:
-        info = loadmat(fpath, variable_names=["tireid"])
-        tire_str = _mat_str(info["tireid"])
-        if not all(sub in tire_str for sub in TIRE_ID_SUBSTRINGS):
-            continue
-
-        d = loadmat(fpath, variable_names=["SR", "FX", "FZ", "IA", "P"])
-        sr_list.append(np.asarray(d["SR"]).squeeze())
-        fx_list.append(np.asarray(d["FX"]).squeeze())
-        fz_list.append(np.asarray(d["FZ"]).squeeze())
-        ia_list.append(np.asarray(d["IA"]).squeeze())
-        p_list.append(np.asarray(d["P"]).squeeze())
-        print(f"  loaded: {os.path.basename(fpath)}  ({tire_str})")
-
-    if not sr_list:
-        raise RuntimeError(
-            "no Hoosier 43100 18.0x6.0-10 R20 (7 inch rim) runs matched. "
-            "check TYRE_DATA_PATH and the tire id filter."
-        )
-
-    SR_all = np.concatenate(sr_list)
-    FX_all = np.concatenate(fx_list)
-    FZ_all = np.concatenate(fz_list)
-    IA_all = np.concatenate(ia_list)
-    P_all = np.concatenate(p_list)
-
-    print(f"total raw data points: {len(SR_all)}\n")
-
-    FZ_pos = np.abs(FZ_all)  # TTC stores FZ negative
-
-    valid = (
-        (FZ_pos > FZ_MIN) & (FZ_pos < FZ_MAX)
-        & (SR_all > SR_MIN)
-        & (SR_all <= 0)
-        & (np.abs(P_all - PRESSURE_TARGET) < PRESSURE_TOL)
-    )
-
-    SR = SR_all[valid][::DECIMATE]
-    FX = FX_all[valid][::DECIMATE]
-    FZ = FZ_pos[valid][::DECIMATE]
-    IA = IA_all[valid][::DECIMATE]
-
-    print(f"data points after filtering: {valid.sum()}  "
-          f"(using every {DECIMATE}-th -> {SR.size} points)\n")
-
-    _data_cache = {"SR": SR, "FX": FX, "FZ": FZ, "IA": IA}
-    return _data_cache
-
-
-def _mf_brake(p, kappa, Fz):
+def pacejka_brake_force(p, kappa, Fz):
     """
     Pacejka BNP 1989 pure brake slip magic formula.
-    kappa is slip ratio [-] (unitless, matches SR_MAX convention above —
+    kappa is slip ratio [-] (unitless, matches SL_MAX convention above —
     no radians/degrees ambiguity here, unlike the lateral model).
     Fz in N.
 
@@ -119,23 +47,40 @@ def _mf_brake(p, kappa, Fz):
     Fx = D * np.sin(C * np.arctan(B * kx - E * (B * kx - np.arctan(B * kx)))) + Sv
     return Fx
 
+def filter_data(data):
+    for run_id in data:
+        SL = data[run_id]["SL"]
+        SA = data[run_id]["SA"]
+        FZ = data[run_id]["FZ"]
+        P = data[run_id]["P"]
 
-def generate_coeffs(n_starts=8, seed=0):
+        valid = (
+            (FZ > FZ_MIN) & (FZ < FZ_MAX)
+            & (SL > SL_MIN)
+            & (SL < SL_MAX)
+            & (np.abs(P - PRESSURE_TARGET) < PRESSURE_TOL)
+        )
+
+
+        for entry_id in data[run_id]:
+            data[run_id][entry_id] = data[run_id][entry_id][valid][::DECIMATE]
+
+
+def generate_coeffs(run_data, run_id, n_starts=8, seed=0):
     global _coeffs_cache
     if _coeffs_cache is not None:
         return _coeffs_cache
 
-    data = load_data()
-    SR, FX, FZ, IA = data["SR"], data["FX"], data["FZ"], data["IA"]
+    SL, FX, FZ, IA = run_data["SL"], run_data["FX"], run_data["FZ"], run_data["IA"]
 
-    print("Largest found SR: ", max(SR))
+    print("RETRIEVED RUN DATA: ", run_data)
 
     # ---- stage 1: anchor peak-force load curve D(Fz) ----
     fz_bin_centers = np.arange(150, 1251, 50)
     fz_bin_tol = 55.0
     fzc, dpk = [], []
     for fz in fz_bin_centers:
-        sel = (np.abs(FZ - fz) < fz_bin_tol) & (np.abs(SR) > 0.14) & (np.abs(IA) < 0.6)
+        sel = (np.abs(FZ - fz) < fz_bin_tol) & (np.abs(SL) > 0.155) & (np.abs(IA) < 0.6)
         if sel.sum() > 40:
             v = np.sort(np.abs(FX[sel]))
             fzc.append(fz)
@@ -151,17 +96,26 @@ def generate_coeffs(n_starts=8, seed=0):
     # ---- stage 1b: anchor initial slope BCD(Fz) via near-origin regression ----
     # This is the key fix — directly ties b3/b4/b5 to the data's actual
     # dFx/dkappa near kappa=0, instead of letting stage 2 guess them freely.
-    sr_lin_tol = 0.02  # [-] "linear near origin" window — tune against your data
+    sl_lin_tol = 0.02  # [-] "linear near origin" window — tune against your data
     fzc_slope, slope_data = [], []
     for fz in fz_bin_centers:
-        sel = (np.abs(FZ - fz) < fz_bin_tol) & (np.abs(SR) < sr_lin_tol) & (np.abs(IA) < 0.6)
+        sel = (np.abs(FZ - fz) < fz_bin_tol) & (np.abs(SL) < sl_lin_tol) & (np.abs(IA) < 0.6)
         if sel.sum() > 20:
             # least-squares slope through origin: slope = sum(SR*FX)/sum(SR^2)
-            slope = (SR[sel] @ FX[sel]) / (SR[sel] @ SR[sel])
+            slope = (SL[sel] @ FX[sel]) / (SL[sel] @ SL[sel])
             fzc_slope.append(fz)
             slope_data.append(abs(slope))
     fzc_slope = np.asarray(fzc_slope, dtype=float)
     slope_data = np.asarray(slope_data, dtype=float)
+
+    if fzc_slope.size == 0:
+        raise ValueError(
+            f"run_id={run_id}: stage 1b found no Fz bins with enough near-origin "
+            f"data (sel.sum() > 20 never satisfied with sl_lin_tol={sl_lin_tol}). "
+            f"This run file likely has too few samples for a per-file fit — "
+            f"consider pooling multiple run files, widening sl_lin_tol, or "
+            f"lowering the sel.sum() threshold for sparse single-file fits."
+        )
 
     print(f"stage 1b — slope anchor points: {len(fzc_slope)} bins, "
           f"slope range {slope_data.min():.0f} - {slope_data.max():.0f} N/unit-kappa")
@@ -198,7 +152,7 @@ def generate_coeffs(n_starts=8, seed=0):
 
     def residuals(free):
         p = expand(free)
-        model = _mf_brake(p, SR, FZ)
+        model = pacejka_brake_force(p, SL, FZ)
         return (FX - model) / FZ
 
     #        b0    b6     b7    b8    b9   b10   b11   b12
@@ -227,7 +181,7 @@ def generate_coeffs(n_starts=8, seed=0):
             best_free = result.x
 
     p_fit = expand(best_free)
-    rms_err = np.sqrt(np.mean((FX - _mf_brake(p_fit, SR, FZ)) ** 2))
+    rms_err = np.sqrt(np.mean((FX - pacejka_brake_force(p_fit, SL, FZ)) ** 2))
     print(f"\nbest normalized cost = {best_cost:.5f}")
     print(f"fit complete — rms error: {rms_err:.2f} N\n")
 
@@ -237,7 +191,7 @@ def generate_coeffs(n_starts=8, seed=0):
     for name, val in zip(coeff_names, p_fit):
         print(f"  {name:<14} = {val:12.6f}")
 
-    savemat(Path("../../data/coeffs/hoosier_r20_tire_params_brake.mat").expanduser().resolve(), {
+    savemat(Path(f"../../data/coeffs/brake/[{run_id}] hoosier_r20_tire_params_brake.mat").expanduser().resolve(), {
         "coeffs": p_fit,
         "coeff_names": coeff_names,
         "rms_error_N": rms_err,
@@ -251,17 +205,16 @@ def generate_coeffs(n_starts=8, seed=0):
     return p_fit
 
 
-def plot_fx_vs_sr(fn_buckets):
+def plot_fx_vs_sl(run_data, run_id, fn_buckets):
     """
     Brake force vs slip ratio, one curve per Fz bucket in fn_buckets [N].
     Model curves overlaid on measured scatter near each bucket.
     """
-    data = load_data()
-    SR, FX, FZ, IA = data["SR"], data["FX"], data["FZ"], data["IA"]
-    p_fit = generate_coeffs()
+    SL, FX, FZ, IA = run_data["SL"], run_data["FX"], run_data["FZ"], run_data["IA"]
+    p_fit = generate_coeffs(run_data, run_id)
 
-    sr_lo, sr_hi = SR.min(), SR.max()
-    sr_vec = np.linspace(sr_lo, sr_hi, 300)
+    sl_lo, sl_hi = SL.min(), SL.max()
+    sl_vec = np.linspace(sl_lo, sl_hi, 300)
     fz_tol = 60.0
     cmap = plt.get_cmap("jet", len(fn_buckets))
 
@@ -272,10 +225,10 @@ def plot_fx_vs_sr(fn_buckets):
             print(f"skipping F_Z = {fz} N (only {idx.sum()} points nearby)")
             continue
 
-        ax.scatter(SR[idx], FX[idx], s=5, color=cmap(k), alpha=0.20)
+        ax.scatter(SL[idx], FX[idx], s=5, color=cmap(k), alpha=0.20)
 
-        fx_pred = _mf_brake(p_fit, sr_vec, fz * np.ones_like(sr_vec))
-        ax.plot(sr_vec, fx_pred, color=cmap(k), linewidth=2, label=f"F_Z = {fz:g} N")
+        fx_pred = pacejka_brake_force(p_fit, sl_vec, fz * np.ones_like(sl_vec))
+        ax.plot(sl_vec, fx_pred, color=cmap(k), linewidth=2, label=f"F_Z = {fz:g} N")
 
     ax.axhline(0, linestyle="--", color="k", alpha=0.25)
     ax.axvline(0, linestyle="--", color="k", alpha=0.25)
@@ -285,25 +238,25 @@ def plot_fx_vs_sr(fn_buckets):
     ax.legend(loc="best")
     ax.grid(True)
     plt.tight_layout()
-    fig.savefig(Path(f"../../figures/tyres/Fx vs SR (Brake).png").expanduser().resolve(), dpi=150)
+    fig.savefig(Path(f"../../figures/tyres/brake/[{run_id}] Fx vs SL (Brake).png").expanduser().resolve(), dpi=150)
     plt.close(fig)
 
 
-def plot_fx_vs_fn(sr_buckets):
+def plot_fx_vs_fn(run_data, run_id, sl_buckets):
     """
-    Brake force vs normal force, one curve per slip ratio in sr_buckets [-].
+    Brake force vs normal force, one curve per slip ratio in sl_buckets [-].
     Model-only continuous Fz sweep — direct visualization of brake
     load sensitivity (sub-linear rise of Fx with Fz).
     """
-    p_fit = generate_coeffs()
+    p_fit = generate_coeffs(run_data, run_id)
 
     fz_vec = np.linspace(100, 1300, 300)
-    cmap = plt.get_cmap("viridis", len(sr_buckets))
+    cmap = plt.get_cmap("viridis", len(sl_buckets))
 
     fig, ax = plt.subplots(figsize=(9, 6))
-    for k, sr in enumerate(sr_buckets):
-        fx_pred = np.abs(_mf_brake(p_fit, sr * np.ones_like(fz_vec), fz_vec))
-        ax.plot(fz_vec, fx_pred, color=cmap(k), linewidth=2, label=f"κ = {sr:g}")
+    for k, sl in enumerate(sl_buckets):
+        fx_pred = np.abs(pacejka_brake_force(p_fit, sl * np.ones_like(fz_vec), fz_vec))
+        ax.plot(fz_vec, fx_pred, color=cmap(k), linewidth=2, label=f"κ = {sl:g}")
 
     ax.set_xlabel("normal force  F_Z  [N]")
     ax.set_ylabel("brake force  |F_X|  [N]")
@@ -311,25 +264,21 @@ def plot_fx_vs_fn(sr_buckets):
     ax.legend(loc="best")
     ax.grid(True)
     plt.tight_layout()
-    fig.savefig(Path(f"../../figures/tyres/Fx vs Fn (Brake).png").expanduser().resolve(), dpi=150)
+    fig.savefig(Path(f"../../figures/tyres/brake/[{run_id}] Fx vs Fn (Brake).png").expanduser().resolve(), dpi=150)
     plt.close(fig)
 
 
 if __name__ == "__main__":
+    data = load_data(TYRE_DATA_PATH, TIRE_ID_SUBSTRINGS, start_idx=0)
+    filter_data(data)
 
-    data = load_data()
-    print("SR min/max:", data["SR"].min(), data["SR"].max())
-    print("SR count:", data["SR"].size)
-    print("SR histogram:")
-    print(np.histogram(data["SR"], bins=10))
+    for run_id in data:
+        try:
+            _coeffs_cache = None
 
-    p_fit = generate_coeffs()
-    for fz in [200, 600, 1000, 1200]:
-        C = p_fit[0]
-        D = fz * (p_fit[1]*fz + p_fit[2])
-        BCD = (p_fit[3]*fz**2 + p_fit[4]*fz) * np.exp(-p_fit[5]*fz)
-        B = BCD / (C*D) if C*D != 0 else float('nan')
-        print(f"Fz={fz}: B={B:.2f}  C={C:.3f}  D={D:.1f}")
-
-    plot_fx_vs_sr(fn_buckets=[200, 600, 1000, 1200])
-    plot_fx_vs_fn(sr_buckets=[0.05, 0.1, 0.15, 0.2])
+            if len(data[run_id]["SL"]) > 0:
+                generate_coeffs(data[run_id], run_id)
+                plot_fx_vs_sl(data[run_id], run_id, fn_buckets=[200, 600, 1000, 1200])
+                plot_fx_vs_fn(data[run_id], run_id, sl_buckets=[1.92, 4, 8, 12])
+        except Exception as e:
+            print(str(e))
