@@ -17,13 +17,18 @@ class YMD:
         self.tire = Tire()
 
         # Variables store angles in degrees; computations on these angles involve changing them to radians first
-        self.n_beta = 241
-        self.n_delta = 241
+        self.n_beta = 121
+        self.n_delta = 121
         self.beta_limit = 20
         self.delta_limit = 20
 
         self.beta_range = np.linspace(-self.beta_limit, self.beta_limit, self.n_beta)
         self.delta_range = np.linspace(-self.delta_limit, self.delta_limit, self.n_delta)
+
+
+    # ---------- Setup ----------
+    def setup(self):
+        self.tire.setup()
 
 
     def solve_point(self, beta, delta, V, max_iter=50, tol=1e-6):
@@ -53,10 +58,10 @@ class YMD:
             # print("Generated Corner Loads: ", FzFL, FzFR, FzRL, FzRR)
 
             # TODO: Calculate roll amount based on roll gradient OR roll rate
-            FyFL = self.tire.calculate_lat_force(FzFL + FzDF, alpha_f, 0)
-            FyFR = self.tire.calculate_lat_force(FzFR + FzDF, alpha_f, 0)
-            FyRL = self.tire.calculate_lat_force(FzRL + FzDF, alpha_r, 0)
-            FyRR = self.tire.calculate_lat_force(FzRR + FzDF, alpha_r, 0)
+            FyFL = self.tire.calculate_lat_force_surface(alpha_f, 0, FzFL + FzDF, 68.9476)
+            FyFR = self.tire.calculate_lat_force_surface(alpha_f, 0, FzFR + FzDF, 68.9476)
+            FyRL = self.tire.calculate_lat_force_surface(alpha_r, 0, FzRL + FzDF, 68.9476)
+            FyRR = self.tire.calculate_lat_force_surface(alpha_r, 0, FzRR + FzDF, 68.9476)
 
             Fy_front = FyFL + FyFR
             Fy_rear = FyRL + FyRR
@@ -203,11 +208,16 @@ if __name__ == "__main__":
     V = 13.9
 
     ymd = YMD()
+    ymd.setup()
+
     ymd.build_ymd(V)
     ymd.plot_ymd("FSAE Michigan 2026 Skidpad YMD")
 
     corner_entry_results = ymd.analyze_corner_entry()
-    print(corner_entry_results)
+    print("Corner Entry Results: ", corner_entry_results)
+
+    print()
 
     mid_corner_results = ymd.analyze_mid_corner()
-    # print(mid_corner_results)
+    # print("Mid Corner Results: ", mid_corner_results)
+    print("\tMid Corner Results: ", max(mid_corner_results["dMz_ddelta"], key = lambda entry : entry["Ay"]))

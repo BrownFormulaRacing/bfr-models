@@ -36,7 +36,7 @@ def filter_data(data):
         )
 
         for entry_id in data[run_id]:
-            data[run_id][entry_id] = data[run_id][entry_id][valid][::DECIMATE]
+            data[run_id][entry_id] = data[run_id][entry_id][valid]
 
 def pacejka_lat_force(p, alpha_deg, Fz, gamma_deg=0.0):
     """
@@ -306,7 +306,7 @@ def plot_fy_vs_sa_4param(run_data, run_id, fn_buckets):
     p_fit = generate_coeffs_4param(run_data, run_id)
 
     sa_vec = np.linspace(-SA_MAX, SA_MAX, 300)
-    fz_tol = 60.0
+    fz_tol = 27.5
     cmap = plt.get_cmap("jet", len(fn_buckets))
 
     fig, ax = plt.subplots(figsize=(9, 6))

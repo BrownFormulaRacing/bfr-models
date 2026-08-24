@@ -11,7 +11,7 @@ def _mat_str(val):
     arr = np.asarray(val)
     return str(arr.item()).strip() if arr.size == 1 else str(arr).strip()
 
-def load_data(dir, tire_id_substrings, start_idx=1500):
+def load_data(dir, tire_id_substrings, start_idx=0):
     """
     Load and filter all matching TTC cornering runs from TYRE_DATA_PATH.
     Returns a dict of 1D numpy arrays: SA [deg], FY [N], FZ [N, positive], IA [deg].

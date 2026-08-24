@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.io import loadmat, savemat
 from scipy.optimize import least_squares
 from pathlib import Path
-from .pacejka_model_helper import load_data
+from pacejka_model_helper import load_data
 
 TYRE_DATA_PATH = Path("../../data/tyres/RunData_DriveBrake_Matlab_SI_Round9").expanduser().resolve()
 
@@ -267,5 +267,31 @@ if __name__ == "__main__":
             print("Run Data: ", data[run_id])
 
             generate_coeffs(data[run_id], run_id)
-            plot_fx_vs_sl(data[run_id], run_id, fn_buckets=[200, 600, 1000, 1200])
+            plot_fx_vs_sl(data[run_id], run_id, fn_buckets=[200, 600, 673, 1000, 1200])
             plot_fx_vs_fn(data[run_id], run_id, sl_buckets=[1.92, 4, 8, 12])
+
+            total_accel = 0.849
+            while True:
+                # df = 0.5 * 1.225 * (18.75 ** 2) * 2.84
+                df = 0
+                fz_fronts = (257 * 9.81 / 4) - (total_accel * 9.81 * 257 * 0.3 / (1.53 * 2)) + (df / 4)
+                fz_rears = (257 * 9.81 / 4) + (total_accel * 9.81 * 257 * 0.3 / (1.53 * 2)) + (df / 4)
+
+                print("Front Weights: ", fz_fronts)
+                print("Rear Weights: ", fz_rears)
+
+                fronts_total = 2 * pacejka_long_force(_coeffs_cache, 0.0325, fz_fronts) * 0.7
+                rears_total = 2 * pacejka_long_force(_coeffs_cache, 0.079, fz_rears) * 0.7
+
+                vehicle_total = fronts_total + rears_total
+                new_accel = (vehicle_total) / (257 * 9.81)
+
+                print("Next Predicted Accel: ", new_accel)
+
+                if abs(new_accel - total_accel) < 0.01:
+                    break
+                else:
+                    total_accel = new_accel
+
+            print("Max Achieval Accel: ", total_accel)
+
