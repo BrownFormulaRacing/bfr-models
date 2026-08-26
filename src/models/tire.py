@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pickle
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from scipy.io import loadmat, savemat
@@ -7,10 +8,7 @@ from scipy.optimize import least_squares
 from scipy.interpolate import make_splrep, make_smoothing_spline, RectBivariateSpline, RegularGridInterpolator
 import numpy as np
 import math
-
-DEFAULT_RUN_ID = "B2356run8"
-DEFAULT_DATA_PATH = Path(Path.cwd() / f"data/tyres/RunData_Cornering_Matlab_SI_Round9/{DEFAULT_RUN_ID}.mat").expanduser().resolve()
-DEFAULT_COEFFS_PATH = Path(Path.cwd() / f"data/coeffs/lateral/[{DEFAULT_RUN_ID}] hoosier_r20_lat_mf52_coeffs.mat").expanduser().resolve()
+from ..utils.files import DEFAULT_RUN_ID, DEFAULT_LAT_DATA_PATH, DEFAULT_LAT_SURFACE_PATH, DEFAULT_LAT_COEFFS_PATH
 
 CHANNELS = set(["ET", "FX", "FY", "AMBTMP", "FZ", "IA", "MX", "MZ", "N", "P", "RE", "RL", "RST", "SA", "SL", "SR", "TSTC", "TSTI", "TSTO", "V"])
 FY_SCALING_FACTOR = 0.7
@@ -36,11 +34,12 @@ IA_TOL = 0.5
 P_TOL = 5
 
 class Tire:
-    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_DATA_PATH, coeffs_path=DEFAULT_COEFFS_PATH):
+    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_LAT_DATA_PATH, coeffs_path=DEFAULT_LAT_COEFFS_PATH, surface_path=DEFAULT_LAT_SURFACE_PATH):
 
         self.run_id = run_id
         self.data_path = data_path
         self.coeffs_path = coeffs_path
+        self.surface_path = surface_path
         self.tire_id_substrings = ["43075", "16x7.5", "8 inch rim"]
 
         self.lat_mf4_coeffs = dict()
@@ -53,14 +52,35 @@ class Tire:
 
     # ---------- Setup ----------
     def setup(self):
-        # Load the data
-        self.load_data()
+        try:
+            # Load the data
+            self.load_data()
 
-        # Process the data
-        self.process_data()
+            # Process the data
+            self.process_data()
 
-        # Perform fitting
-        self.fit_lat_spline()
+            if self.surface_path.is_file():
+                self.load_lat_surface()
+                print("Finished loading file?")
+            else:
+                # Perform fitting
+                self.fit_lat_spline()
+
+                self.save_lat_surface()
+                print("Could not fine this path, will fit spline data: ", self.surface_path)
+        except Exception as e:
+            print("Failed to setup tire object: ", str(e))
+
+
+    def load_lat_surface(self):
+        with open(self.surface_path, "rb") as f:
+            self.lat_surface = pickle.load(f)
+            print("SURFACE: ", self.lat_surface)
+
+
+    def save_lat_surface(self):
+        with open(self.surface_path, "wb") as f:
+            pickle.dump(self.lat_surface, f)
 
 
     # ---------- For Model Invocation ----------
@@ -170,7 +190,10 @@ class Tire:
 
     def calculate_lat_force_surface(self, alpha, gamma, fz, p):
         query_point = np.array([alpha, fz, gamma, p])
-        return self.lat_surface(query_point)[0] * FY_SCALING_FACTOR
+
+        # Negative value incorporated so that Ay sign convention matches right turn
+        result = self.lat_surface(query_point)[0] * FY_SCALING_FACTOR
+        return result
 
 
     # ---------- Loading Coefficients ----------
@@ -691,10 +714,9 @@ class Tire:
 if __name__ == "__main__":
     tire = Tire()
 
-    tire.load_data()
-    tire.process_data()
+    tire.setup()
 
-    tire.fit_lat_spline()
+    result = tire.calculate_lat_force_surface(5, 0.5, 1000, 68.9476)
 
     tire.plot_fy_over_sa_per_fz("lateral", "Fy vs SA per Fz", [180, 400, 630, 1000], 4, 82.7371)
     tire.plot_fy_over_sa_per_ia("lateral", "Fy vs SA per IA", 1000, [0, 1], 82.7371)

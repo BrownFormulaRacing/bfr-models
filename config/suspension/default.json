@@ -1,0 +1,33 @@
+{
+    "settings": [
+        {
+            "name": "Default",
+            "description": "Standard default car setting",
+            "mass": 288,
+            "cg_height": 0.3,
+            "trackwidth": 1.245,
+            "wheelbase": 1.53,
+            "weight_dist_front": 0.48,
+            "yaw_moi": 125, 
+
+            "roll_rate": {
+                "F": 40000.0,
+                "R": 40000.0
+            },
+            "pitch_rate": {
+                "F": 0.0,
+                "R": 0.0
+            },
+            "camber_gain_roll": {
+                "FI": 0.0,
+                "FO": 0.0,
+                "RI": 0.0,
+                "RO": 0.0
+            },
+            "camber_gain_heave": {
+                "F": 0.0,
+                "R": 0.0
+            }
+        }
+    ]
+}

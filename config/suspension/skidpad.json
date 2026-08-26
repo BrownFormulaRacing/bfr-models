@@ -1,0 +1,28 @@
+{
+    "settings": [
+        {
+            "name": "Default",
+            "description": "FSAE Michigan 2026 Comp.",
+            "mass": 263,
+            "cg_height": 0.300,
+            "trackwidth": 1.245,
+            "wheelbase": 1.53,
+            "weight_dist_front": 0.5,
+            "front_roll_rate": 40000.0,
+            "rear_roll_rate": 40000.0,
+            "pitch_rate": 0.0
+        },
+        {
+            "name": "Default",
+            "description": "FSAE Michigan 2026 Comp.",
+            "mass": 263,
+            "cg_height": 0.300,
+            "trackwidth": 1.245,
+            "wheelbase": 1.53,
+            "weight_dist_front": 0.5,
+            "front_roll_rate": 40000.0,
+            "rear_roll_rate": 40000.0,
+            "pitch_rate": 0.0
+        }
+    ]
+}
