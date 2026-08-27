@@ -1,41 +1,102 @@
 %% SUSPENSION REAR LOADS ANALYSIS (Full Kinematics, Travel, Peak Table + Combined 3g Bump g-g Loop)
 clear; clc; close all;
 
+% %% INPUTS
+% hp_front = struct( ...
+%     'LowerFore',        [-387.00, 	  207.00,	 83.70], ...
+%     'LowerAft',         [-629.00, 	  211.25,	 89.32], ...
+%     'UpperFore',        [-409.00,	  314.80,	 225.65], ...
+%     'UpperAft',         [-614.60,	  290.30,	 218.20], ...
+%     'LowerOutboard',    [-496.55,	  579.09,	 127.71], ...
+%     'UpperOutboard',    [-511.76,	  561.69,	 271.96], ...
+%     'ToeInboard',       [-417.80,	  220.90,	 118.00], ...
+%     'ToeOutboard',      [-415.45,	  570.66,	 168.56], ...
+%     'PushrodLower',     [-504.68,	  553.33,	 156.93], ... 
+%     'PushrodUpper',     [-623.10,	  249.39,	 533.96]);  
+% 
+% hp_rear = struct( ...
+%     'LowerFore',        [-1707.078,   290.000,   104.500], ...
+%     'LowerAft',         [-1972.500,   229.675,   101.631], ...
+%     'UpperFore',        [-1767.200,   297.000,   240.157], ...
+%     'UpperAft',         [-1973.700,   321.431,   234.000], ...
+%     'LowerOutboard',    [-2010.006,   576.800,   118.948], ...
+%     'UpperOutboard',    [-1993.573,   552.950,   272.618], ...
+%     'ToeInboard',       [-2005.100,   324.184,   231.500], ...
+%     'ToeOutboard',      [-2065.861,   559.200,   268.732], ...
+%     'PushrodLower',     [-1943.75174881,   514.07314992,   118.94800000], ... 
+%     'PushrodUpper',     [-1850.000,   310.000,   450.000]);    
+% 
+% contactPatch = [-2015.95, 622.500, 0.000];
+% 
+% % Bellcrank & Damper Hardpoints
+% hp_rear.BellcrankPivot  = [-1850.000,   250.000,   450.000]; 
+% hp_rear.BellcrankAxis   = [-1900.000,   250.000,   450.000]; 
+% hp_rear.SpringBellcrank = [-1830.000,   200.000,   480.000]; 
+% hp_rear.SpringChassis   = [-1650.000,   200.000,   420.000]; 
+% 
+% links = struct( ...
+%     'name',    {'upper fore', 'upper aft', 'lower fore', 'lower aft', 'pushrod',      'toe link'}, ...
+%     'chassis', {'UpperFore',  'UpperAft',  'LowerFore',  'LowerAft',  'PushrodUpper', 'ToeInboard'}, ...
+%     'upright', {'UpperOutboard','UpperOutboard','LowerOutboard','LowerOutboard','PushrodLower','ToeOutboard'});
+% 
+% % Vehicle inputs
+% veh.massTotal       = 288.00;  % kg, total vehicle mass w/ driver
+% veh.massSprung      = 253.00;  % kg, total sprung mass
+% veh.massUnsprungF   = 16.80;   % kg, total front unsprung mass
+% veh.massUnsprungR   = 18.20;   % kg, total rear unsprung mass
+% veh.massSprungF     = 121.44;  % kg, front sprung mass
+% veh.massSprungR     = 131.56;  % kg, rear sprung mass
+% veh.wheelbase       = 1530;    % mm
+% veh.trackFront      = 1245;    % mm
+% veh.trackRear       = 1245;    % mm
+% veh.cgHeight        = 300;     % mm
+% veh.tireRadius      = 203.2;   % mm
+% veh.rollCenterF     = -25.16;  % mm
+% veh.rollCenterR     = 25.40;   % mm
+% veh.rollStiffnessF  = 0.46;    % fraction of roll stiffness at front; should be worst case scenario
+% veh.tlltd            = 0.46;   % total LLTD
+% veh.weightFrontFrac = 0.48;    % static weight distribution
+% veh.dfMaxAccel      = 947.70;  % N, Max Accel Downforce
+% veh.dfMaxCornering  = 799.15;  % N, Max Cornering Downforce
+% veh.aeroBalance     = 0.48;    % Assumed 50/50 split
+% corner = 'RL';         
+
 %% INPUTS
+
 hp_front = struct( ...
-    'LowerFore',        [-387.00, 	  207.00,	 83.70], ...
-    'LowerAft',         [-629.00, 	  211.25,	 89.32], ...
-    'UpperFore',        [-409.00,	  314.80,	 225.65], ...
-    'UpperAft',         [-614.60,	  290.30,	 218.20], ...
-    'LowerOutboard',    [-496.55,	  579.09,	 127.71], ...
-    'UpperOutboard',    [-511.76,	  561.69,	 271.96], ...
-    'ToeInboard',       [-417.80,	  220.90,	 118.00], ...
-    'ToeOutboard',      [-415.45,	  570.66,	 168.56], ...
-    'PushrodLower',     [-504.68,	  553.33,	 156.93], ... 
-    'PushrodUpper',     [-623.10,	  249.39,	 533.96]);  
+    'LowerFore',        [-0.38700,    0.20700,    0.08370], ...
+    'LowerAft',         [-0.62900,    0.21125,    0.08932], ...
+    'UpperFore',        [-0.40900,    0.31480,    0.22565], ...
+    'UpperAft',         [-0.61460,    0.29030,    0.21820], ...
+    'LowerOutboard',    [-0.49655,    0.57909,    0.12771], ...
+    'UpperOutboard',    [-0.51176,    0.56169,    0.27196], ...
+    'ToeInboard',       [-0.41780,    0.22090,    0.11800], ...
+    'ToeOutboard',      [-0.41545,    0.57066,    0.16856], ...
+    'PushrodLower',     [-0.50468,    0.55333,    0.15693], ...
+    'PushrodUpper',     [-0.62310,    0.24939,    0.53396]);
 
 hp_rear = struct( ...
-    'LowerFore',        [-1707.078,   290.000,   104.500], ...
-    'LowerAft',         [-1972.500,   229.675,   101.631], ...
-    'UpperFore',        [-1767.200,   297.000,   240.157], ...
-    'UpperAft',         [-1973.700,   321.431,   234.000], ...
-    'LowerOutboard',    [-2010.006,   576.800,   118.948], ...
-    'UpperOutboard',    [-1993.573,   552.950,   272.618], ...
-    'ToeInboard',       [-2005.100,   324.184,   231.500], ...
-    'ToeOutboard',      [-2065.861,   559.200,   268.732], ...
-    'PushrodLower',     [-1943.75174881,   514.07314992,   118.94800000], ... 
-    'PushrodUpper',     [-1850.000,   310.000,   450.000]);    
+    'LowerFore',        [-1.707078,   0.290000,    0.104500], ...
+    'LowerAft',         [-1.972500,   0.229675,    0.101631], ...
+    'UpperFore',        [-1.767200,   0.297000,    0.240157], ...
+    'UpperAft',         [-1.973700,   0.321431,    0.234000], ...
+    'LowerOutboard',    [-2.010006,   0.576800,    0.118948], ...
+    'UpperOutboard',    [-1.993573,   0.552950,    0.272618], ...
+    'ToeInboard',       [-2.005100,   0.324184,    0.231500], ...
+    'ToeOutboard',      [-2.065861,   0.559200,    0.268732], ...
+    'PushrodLower',     [-1.94375174881,  0.51407314992,  0.11894800000], ...
+    'PushrodUpper',     [-1.850000,   0.310000,    0.450000]);
 
-contactPatch = [-2015.95, 622.500, 0.000];
+contactPatch = [-2.01595, 0.622500, 0.000000];
 
 % Bellcrank & Damper Hardpoints
-hp_rear.BellcrankPivot  = [-1850.000,   250.000,   450.000]; 
-hp_rear.BellcrankAxis   = [-1900.000,   250.000,   450.000]; 
-hp_rear.SpringBellcrank = [-1830.000,   200.000,   480.000]; 
-hp_rear.SpringChassis   = [-1650.000,   200.000,   420.000]; 
+hp_rear.BellcrankPivot  = [-1.850000, 0.250000, 0.450000];
+hp_rear.BellcrankAxis   = [-1.900000, 0.250000, 0.450000];
+hp_rear.SpringBellcrank = [-1.830000, 0.200000, 0.480000];
+hp_rear.SpringChassis   = [-1.650000, 0.200000, 0.420000];
 
 links = struct( ...
-    'name',    {'upper fore', 'upper aft', 'lower fore', 'lower aft', 'pushrod',      'toe link'}, ...
+    'name',    {'upper fore', 'upper aft', 'lower fore', 'lower aft', 'pushrod', 'toe link'}, ...
     'chassis', {'UpperFore',  'UpperAft',  'LowerFore',  'LowerAft',  'PushrodUpper', 'ToeInboard'}, ...
     'upright', {'UpperOutboard','UpperOutboard','LowerOutboard','LowerOutboard','PushrodLower','ToeOutboard'});
 
@@ -46,20 +107,25 @@ veh.massUnsprungF   = 16.80;   % kg, total front unsprung mass
 veh.massUnsprungR   = 18.20;   % kg, total rear unsprung mass
 veh.massSprungF     = 121.44;  % kg, front sprung mass
 veh.massSprungR     = 131.56;  % kg, rear sprung mass
-veh.wheelbase       = 1530;    % mm
-veh.trackFront      = 1245;    % mm
-veh.trackRear       = 1245;    % mm
-veh.cgHeight        = 300;     % mm
-veh.tireRadius      = 203.2;   % mm
-veh.rollCenterF     = -25.16;  % mm
-veh.rollCenterR     = 25.40;   % mm
-veh.rollStiffnessF  = 0.46;    % fraction of roll stiffness at front; should be worst case scenario
+
+veh.wheelbase       = 1.530;   % m
+veh.trackFront      = 1.245;   % m
+veh.trackRear       = 1.245;   % m
+veh.cgHeight        = 0.300;   % m
+veh.tireRadius      = 0.2032;  % m
+veh.rollCenterF     = -0.02516; % m
+veh.rollCenterR     = 0.02540;  % m
+
+veh.rollStiffnessF  = 0.46;    % fraction of roll stiffness at front
 veh.tlltd            = 0.46;   % total LLTD
 veh.weightFrontFrac = 0.48;    % static weight distribution
+
 veh.dfMaxAccel      = 947.70;  % N, Max Accel Downforce
 veh.dfMaxCornering  = 799.15;  % N, Max Cornering Downforce
 veh.aeroBalance     = 0.48;    % Assumed 50/50 split
-corner = 'RL';                 
+
+corner = 'RL';
+
 
 % g-g Diagram Inputs
 gg.axMax = 1.50;  % g
@@ -113,13 +179,19 @@ for i = 1:nLinks
 end
 
 rcp_rear = contactPatch(:);
-rcp_front = [-485.902,    622.5,	0];
+%rcp_front = [-485.902,    622.5,	0];
+rcp_front = [-0.485902, 0.6225, 0];
 
-%% Tire loads (Nominal Maneuver)
-[Fx_t, Fy_t, Fz_t] = computeTireLoads(fx, fy, veh, corner, g0, gg, 0.0);
+%% Tire loads (Nominal Maneuver - Rear)
+[Fxr_t, Fyr_t, Fzr_t] = computeTireLoads(fx, fy, veh, corner, g0, gg, 0.0);
 
-%% Tire loads (Combined 3g Bump Dynamic Case)
+%% Tire loads (Nominal Maneuver - Front)
+[Fxf_t, Fyf_t, Fzf_t] = computeTireLoads(fx, fy, veh, 'FL', g0, gg, 0.0);
+
+%% Tire loads (Combined 3g Bump Dynamic Case - Rear)
 [Fxr_t_bump, Fyr_t_bump, Fzr_t_bump] = computeTireLoads(fx, fy, veh, corner, g0, gg, 3.0);
+
+
 
 %% Tire loads (Front Left - Combined 3g Bump Dynamic Case)
 [Fxf_t_bump, Fyf_t_bump, Fzf_t_bump] = computeTireLoads(fx, fy, veh, 'FL', g0, gg, 3.0);
@@ -189,7 +261,8 @@ function [Fx_t, Fy_t, Fz_t] = computeTireLoads(fx, fy, veh, corner, g0, gg, bump
    
     % Use when given an existing LLTD term
     Fz_static = (veh.massTotal .* g0 .* swd ./ 2) + Fz_aero + (veh.massTotal .* g0 .* bump_g ./ 4);
-    dFz_lat = (veh.massTotal .* g0 .* fy ./ track) .* lltd ./ 2;
+    dFz_veh = (veh.massTotal .* g0 .* fy .* veh.cgHeight ./ track);
+    dFz_lat = (dFz_veh .* lltd) ./ 2;
     Fz_t = Fz_static + dFz_lat + dFz_long;
 
     Fz_vehicle = (veh.massTotal * g0) + (df_current) + (bump_g * veh.massTotal * g0);
@@ -199,10 +272,18 @@ end
 
 
 %% SOLVING LINK LOADS (Combined 3g Bump) - Fronts
+F_front = zeros(nLinks, gg.n);
 F_bump_gg_front = zeros(nLinks, gg.n);
 
 % Iterates thru all possible gg combination (360 deg. possible)
 for k = 1:gg.n
+    % Nominal Case
+    Ftire = [Fxf_t(k); Fyf_t(k); Fzf_t(k)];
+    b = zeros(6,1);
+    b(1:3) = -Ftire;
+    b(4:6) = -cross(rcp_front, Ftire);
+    F_front(:,k) = A_front\b;
+    
     % Combined 3g Bump Case
     Ftire_bump = [Fxf_t_bump(k); Fyf_t_bump(k); Fzf_t_bump(k)];
     b_bump = zeros(6,1);
@@ -224,7 +305,7 @@ for k = 1:gg.n
     end
 
     % Nominal Case
-    Ftire = [Fx_t(k); Fy_t(k); Fz_t(k)];
+    Ftire = [Fxr_t(k); Fyr_t(k); Fzr_t(k)];
     b = zeros(6,1);
     b(1:3) = -Ftire;
     b(4:6) = -cross(final_rcp, Ftire);
@@ -263,7 +344,7 @@ end
 peakTable = table(T_names(:), T_maxTension(:), T_tensionCond(:), T_maxComp(:), T_compCond(:), ...
     'VariableNames', {'Link', 'Max_Tension_N', 'Tension_Condition', 'Max_Compression_N', 'Compression_Condition'});
 
-figTable = figure('Color', 'w', 'Name', 'Peak Suspension Link Loads Summary', 'Position', [200, 200, 950, 220]);
+figTable = figure('Color', 'w', 'Name', 'Peak Suspension Link Loads Summary - Rear (Nominal)', 'Position', [200, 200, 950, 220]);
 uitable(figTable, 'Data', table2cell(peakTable), ...
     'ColumnName', {'Link Name', 'Max Tension (N)', 'Tension Condition (g-s)', 'Max Compression (N)', 'Compression Condition (g-s)'}, ...
     'ColumnWidth', {110, 110, 280, 130, 280}, ...
@@ -355,6 +436,38 @@ uitable(figTable, 'Data', table2cell(peakTable), ...
     'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
 
 
+
+%% Front - PEAK LOAD FINDER & MANEUVER CLASSIFICATION (Nominal)
+linkNames = {links.name};
+
+% Initializing MAX links and such
+T_names = cell(nLinks, 1);          % 6 x 1 matrix
+T_maxTension = zeros(nLinks, 1);    % 6 x 1 matrix of only zeros
+T_tensionCond = cell(nLinks, 1);
+T_maxComp = zeros(nLinks, 1);
+T_compCond = cell(nLinks, 1);
+
+for i = 1:nLinks
+    [maxT, idxT] = max(F_front(i,:));
+    [maxC, idxC] = min(F_front(i,:));
+
+    T_names{i} = linkNames{i};
+    T_maxTension(i) = round(maxT, 1);
+    T_tensionCond{i} = sprintf('Ax: %.2fg, Ay: %.2fg (%s)', fx(idxT), fy(idxT), getManeuverDesc(fx(idxT), fy(idxT)));
+
+    T_maxComp(i) = round(maxC, 1);
+    T_compCond{i} = sprintf('Ax: %.2fg, Ay: %.2fg (%s)', fx(idxC), fy(idxC), getManeuverDesc(fx(idxC), fy(idxC)));
+end
+
+peakTable = table(T_names(:), T_maxTension(:), T_tensionCond(:), T_maxComp(:), T_compCond(:), ...
+    'VariableNames', {'Link', 'Max_Tension_N', 'Tension_Condition', 'Max_Compression_N', 'Compression_Condition'});
+
+figTable = figure('Color', 'w', 'Name', 'Peak Suspension Link Loads Summary - Nominal (Front)', 'Position', [200, 200, 950, 220]);
+uitable(figTable, 'Data', table2cell(peakTable), ...
+    'ColumnName', {'Link Name', 'Max Tension (N)', 'Tension Condition (g-s)', 'Max Compression (N)', 'Compression Condition (g-s)'}, ...
+    'ColumnWidth', {110, 110, 280, 130, 280}, ...
+    'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
+
 %% Figure 1 --- g-g diagram
 figure('Color', 'w', 'Name', 'g-g diagram');
 plot(fy, fx, 'LineWidth', 1.3);
@@ -422,7 +535,7 @@ for j = 1:num_states
     end
     
     for k = 1:gg.n
-        Ftire = [Fx_t(k); Fy_t(k); Fz_t(k)];
+        Ftire = [Fxr_t(k); Fyr_t(k); Fzr_t(k)];
         b = zeros(6,1);
         b(1:3) = -Ftire;
         b(4:6) = -cross(rcp_mod, Ftire);
