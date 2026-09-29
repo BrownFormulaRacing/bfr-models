@@ -52,10 +52,10 @@ class StepSteer():
             # Fz_r = sus_params.mass * G * a / (a + b)
 
             # Tire forces from your nonlinear tire model
-            FyFL = self.tire.calculate_lat_force_surface(alpha_f, 0.4, FzFL + DfFL, 83)
-            FyFR = self.tire.calculate_lat_force_surface(alpha_f, 0.4, FzFR + DfFR, 83)
-            FyRL = self.tire.calculate_lat_force_surface(alpha_r, 0.4, FzRL + DfRL, 83)
-            FyRR = self.tire.calculate_lat_force_surface(alpha_r, 0.4, FzRR + DfRR, 83)
+            FyFL = self.tire.calculate_lat_force_mf52(alpha_f, 0.4, FzFL + DfFL, 83)
+            FyFR = self.tire.calculate_lat_force_mf52(alpha_f, 0.4, FzFR + DfFR, 83)
+            FyRL = self.tire.calculate_lat_force_mf52(alpha_r, 0.4, FzRL + DfRL, 83)
+            FyRR = self.tire.calculate_lat_force_mf52(alpha_r, 0.4, FzRR + DfRR, 83)
 
             Fy_total = FyFL + FyFR + FyRL + FyRR
             Ay_new = Fy_total / sus_params.mass

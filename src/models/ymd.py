@@ -78,10 +78,10 @@ class YMD:
         FzFL, FzFR, FzRL, FzRR = self.car.calculate_corner_loads(Ay)
         DfFL, DfFR, DfRL, DfRR = self.car.calculate_downforce(V)
 
-        FyFL = self.tire.calculate_lat_force_surface(alpha_f, 0.5, FzFL + DfFL, 68.9476)
-        FyFR = self.tire.calculate_lat_force_surface(alpha_f, 0.5, FzFR + DfFR, 68.9476)
-        FyRL = self.tire.calculate_lat_force_surface(alpha_r, 1.4, FzRL + DfRL, 68.9476)
-        FyRR = self.tire.calculate_lat_force_surface(alpha_r, 1.4, FzRR + DfRR, 68.9476)
+        FyFL = self.tire.calculate_lat_force_mf52(alpha_f, 0.5, FzFL + DfFL, 68.9476)
+        FyFR = self.tire.calculate_lat_force_mf52(alpha_f, 0.5, FzFR + DfFR, 68.9476)
+        FyRL = self.tire.calculate_lat_force_mf52(alpha_r, 1.4, FzRL + DfRL, 68.9476)
+        FyRR = self.tire.calculate_lat_force_mf52(alpha_r, 1.4, FzRR + DfRR, 68.9476)
 
         Fy_front = FyFL + FyFR
         Fy_rear = FyRL + FyRR

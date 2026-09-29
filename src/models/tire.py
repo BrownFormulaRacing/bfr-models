@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 from scipy.io import loadmat, savemat
 from scipy.optimize import least_squares
-from scipy.interpolate import make_splrep, make_smoothing_spline, RectBivariateSpline, RegularGridInterpolator
+from scipy.interpolate import make_smoothing_spline, RegularGridInterpolator
 import numpy as np
 import math
-from ..utils.files import DEFAULT_RUN_ID, DEFAULT_LAT_DATA_PATH, DEFAULT_LAT_SURFACE_PATH, DEFAULT_LAT_COEFFS_PATH
+from ..utils.files import DEFAULT_RUN_ID, DEFAULT_LAT_DATA_PATH, DEFAULT_LAT_SURFACE_PATH, DEFAULT_LAT_COEFFS_PATH, DEFAULT_LAT_MF52_COEFFS_PATH
 
 CHANNELS = set(["ET", "FX", "FY", "AMBTMP", "FZ", "IA", "MX", "MZ", "N", "P", "RE", "RL", "RST", "SA", "SL", "SR", "TSTC", "TSTI", "TSTO", "V"])
 FY_SCALING_FACTOR = 0.7
@@ -21,29 +21,36 @@ LAT_MF52_COEFF_NAMES = [
     "pEy1", "pEy2", "pEy3", "pEy4",
     "pKy1", "pKy2", "pKy3",
     "pHy1", "pHy2", "pHy3",
-    "pVy1", "pVy2", "pVy3", "pVy4", "fz0"]
+    "pVy1", "pVy2", "pVy3", "pVy4"]
 LONG_MF52_COEFF_NAMES = []
+
+# initial guess / bounds for the 18 lat mf5.2 coeffs (same order as LAT_MF52_COEFF_NAMES)
+LAT_MF52_X0 = [1.4, 2.5, -0.2, 0, 0, 0, 0, 0, -40, 1.5, 0, 0, 0, 0, 0, 0, 0, 0]
+LAT_MF52_LB = [1.0, 0.5, -2, -50, -10, -10, -10, -50, -200, 0.1, -10, -0.1, -0.1, -1, -0.5, -0.5, -5, -5]
+LAT_MF52_UB = [2.0, 5.0, 2, 50, 1, 10, 10, 50, -1, 10, 10, 0.1, 0.1, 1, 0.5, 0.5, 5, 5]
+LAT_MF52_MIN_POINTS = 500
 
 SA_RANGE = np.linspace(-14, 14, 300)
 FZ_BUCKETS = [230, 400, 630, 900, 1100]
 IA_BUCKETS = [0, 2, 4]
-P_BUCKETS = [41.3685, 55.1581, 68.9476, 82.7371] # in kPa (when hot) - (6, 8, 10, 12) psi choices
+P_BUCKETS = [41.3685, 55.1581, 68.9476, 82.7371, 96.5266] # in kPa (when hot) - (6, 8, 10, 12, 14) psi choices
 
 FZ_TOL = 50
 IA_TOL = 0.5
 P_TOL = 5
 
 class Tire:
-    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_LAT_DATA_PATH, coeffs_path=DEFAULT_LAT_COEFFS_PATH, surface_path=DEFAULT_LAT_SURFACE_PATH):
+    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_LAT_DATA_PATH, coeffs_path=DEFAULT_LAT_COEFFS_PATH, surface_path=DEFAULT_LAT_SURFACE_PATH, mf52_coeffs_path=DEFAULT_LAT_MF52_COEFFS_PATH):
 
         self.run_id = run_id
         self.data_path = data_path
         self.coeffs_path = coeffs_path
         self.surface_path = surface_path
+        self.mf52_coeffs_path = mf52_coeffs_path
         self.tire_id_substrings = ["43075", "16x7.5", "8 inch rim"]
 
         self.lat_mf4_coeffs = dict()
-        self.lat_mf52_coeffs = dict()
+        self.lat_mf52_coeffs = dict() # pressure -> {coeff name -> value, "fz0" -> value}
         self.lat_bnp89_coeffs = dict()
 
         self.lat_splines = dict()
@@ -59,15 +66,13 @@ class Tire:
             # Process the data
             self.process_data()
 
-            if self.surface_path.is_file():
-                self.load_lat_surface()
-                print("Finished loading file?")
+            if self.mf52_coeffs_path.is_file():
+                self.load_lat_mf52_coeffs()
             else:
-                # Perform fitting
-                self.fit_lat_spline()
+                self.fit_lat_mf52()
+                self.save_lat_mf52_coeffs()
 
-                self.save_lat_surface()
-                print("Could not fine this path, will fit spline data: ", self.surface_path)
+            self.print_lat_mf52_coeffs()
         except Exception as e:
             print("Failed to setup tire object: ", str(e))
 
@@ -123,23 +128,20 @@ class Tire:
 
 
     @staticmethod
-    def _lat_mf52_model(params, alpha, gamma, fz):
+    def _lat_mf52_model(params, alpha, gamma, fz, fz0):
         """Pure MF5.2 lateral math against an explicit parameter vector.
         alpha, gamma in radians. Used internally by the fitter."""
         (pCy1, pDy1, pDy2, pDy3,
         pEy1, pEy2, pEy3, pEy4,
         pKy1, pKy2, pKy3,
         pHy1, pHy2, pHy3,
-        pVy1, pVy2, pVy3, pVy4, fz0) = params
+        pVy1, pVy2, pVy3, pVy4) = params
 
         dfz = (fz - fz0) / fz0
 
         Cy = pCy1
         muy = (pDy1 + pDy2 * dfz) * (1 - pDy3 * gamma**2)
         Dy = muy * fz
-
-        Ey = (pEy1 + pEy2 * dfz) * (1 - (pEy3 + pEy4 * gamma) * np.sign(alpha))
-        Ey = np.minimum(Ey, 1.0)
 
         Ky = (pKy1 * fz0 * np.sin(2 * np.arctan(fz / (pKy2 * fz0)))
             * (1 - pKy3 * np.abs(gamma)))
@@ -152,22 +154,30 @@ class Tire:
         SVy = fz * ((pVy1 + pVy2 * dfz) + (pVy3 + pVy4 * dfz) * gamma)
 
         alpha_y = alpha + SHy
+
+        # sign(alpha_y) to match the standard mf5.2 / .tir definition
+        Ey = (pEy1 + pEy2 * dfz) * (1 - (pEy3 + pEy4 * gamma) * np.sign(alpha_y))
+        Ey = np.minimum(Ey, 1.0)
+
         Bx = By * alpha_y
         return Dy * np.sin(Cy * np.arctan(Bx - Ey * (Bx - np.arctan(Bx)))) + SVy
 
 
-    def calculate_lat_force_mf52(self, alpha: float, gamma: float, fz: float) -> float:
-        """Public API: evaluate MF5.2 lateral force using previously fitted
-        coefficients for `run_id`. slip_angle/camber_angle in degrees, matching
-        the BNP-model convention used elsewhere in this class."""
+    def _eval_lat_mf52(self, alpha, gamma, fz, p):
+        # alpha, gamma in deg, fz in N (positive), p in kPa -> unscaled fy in N
+        p_fit = min(self.lat_mf52_coeffs, key=lambda k: abs(k - p))
+        c = self.lat_mf52_coeffs[p_fit]
+        params = [c[name] for name in LAT_MF52_COEFF_NAMES]
+        return self._lat_mf52_model(params, np.deg2rad(alpha), np.deg2rad(gamma), fz, c["fz0"])
 
-        if fz < 0:
+
+    def calculate_lat_force_mf52(self, alpha, gamma, fz, p):
+        # uses the fit at the closest tested pressure
+        if np.any(np.asarray(fz) < 0):
             raise ValueError(f"fz must be a positive load magnitude, got {fz}")
 
-        c = self.lat_mf52_coeffs
-
-        params = [c[name] for name in LAT_MF52_COEFF_NAMES]
-        return float(self._lat_mf52_model(params, alpha, gamma, fz))
+        fy = self._eval_lat_mf52(alpha, gamma, fz, p) * FY_SCALING_FACTOR
+        return float(fy) if np.ndim(fy) == 0 else fy
 
 
     def calculate_lat_force_mf4(self, alpha, gamma, fz):
@@ -214,18 +224,40 @@ class Tire:
 
 
     def load_lat_mf52_coeffs(self):
-        """Load fitted MF5.2 coefficients from a .mat file produced
-        by hoosier_r20_tire_model_lat.m (the `tireParams` struct).
-        """
-        if self.coeffs_path is None or not self.coeffs_path.exists():
-            raise FileNotFoundError(f"Tire coefficient file not found: {self.coeffs_path}")
+        if self.mf52_coeffs_path is None or not self.mf52_coeffs_path.exists():
+            raise FileNotFoundError(f"Tire coefficient file not found: {self.mf52_coeffs_path}")
 
-        mat = loadmat(self.coeffs_path, struct_as_record=False, squeeze_me=True)
+        mat = loadmat(self.mf52_coeffs_path)
+        names = [str(n).strip() for n in mat["coeff_names"]]
 
-        default_coeffs = dict(zip(mat["coeff_names"], mat["coeff_values"]))
-        default_coeffs["fz0"] = mat["fz0"]
+        self.lat_mf52_coeffs = dict()
+        for p, fz0, rms, values in zip(mat["pressures"].ravel(), mat["fz0"].ravel(), mat["rms"].ravel(), np.atleast_2d(mat["coeff_values"])):
+            coeffs = dict(zip(names, values.astype(float)))
+            coeffs["fz0"] = float(fz0)
+            coeffs["rms"] = float(rms)
+            self.lat_mf52_coeffs[float(p)] = coeffs
 
-        self.lat_mf52_coeffs = default_coeffs
+
+    def save_lat_mf52_coeffs(self):
+        pressures = sorted(self.lat_mf52_coeffs)
+        savemat(self.mf52_coeffs_path, {
+            "coeff_names": LAT_MF52_COEFF_NAMES,
+            "pressures": np.array(pressures),
+            "fz0": np.array([self.lat_mf52_coeffs[p]["fz0"] for p in pressures]),
+            "rms": np.array([self.lat_mf52_coeffs[p]["rms"] for p in pressures]),
+            "coeff_values": np.array([[self.lat_mf52_coeffs[p][n] for n in LAT_MF52_COEFF_NAMES] for p in pressures]),
+        })
+
+
+    def print_lat_mf52_coeffs(self):
+        # .tir style names, alpha/gamma in rad, fz in N, tested (sae) sign convention, lmuy etc. = 1
+        for p in sorted(self.lat_mf52_coeffs):
+            c = self.lat_mf52_coeffs[p]
+            print(f"\n[{self.run_id}] mf5.2 lateral coeffs @ P = {p:g} kPa ({p / 6.89476:.0f} psi)")
+            print(f"rms error = {c['rms']:.1f} N")
+            print(f"FNOMIN = {c['fz0']:.1f}")
+            for name in LAT_MF52_COEFF_NAMES:
+                print(f"{name.upper():<6} = {c[name]: .6e}")
 
     # ---------- For Data Management ----------
 
@@ -280,40 +312,40 @@ class Tire:
 
             return keep
 
-        def _avg_sa_hysteresis(run_data, sa_match_tol=0.05,
-                           fz_match_tol=25.0, ia_match_tol=0.1):
-            sa = np.asarray(run_data["SA"])
-            fy = np.asarray(run_data["FY"])
-            fz = np.asarray(run_data["FZ"])
-            ia = np.asarray(run_data["IA"])
-            n = len(sa)
-
-            used = np.zeros(n, dtype=bool)
+        def _avg_sa_hysteresis(run_data, sa_bin=0.2, gap=0.5, min_rate=1.0, k=5):
+            # per sweep, average the +dsa and -dsa passes at the same sa (cancels lag, keeps camber/offset asymmetry)
+            et = np.asarray(run_data["ET"])
+            breaks = np.r_[0, np.where(np.diff(et) > gap)[0] + 1, len(et)]
             out = {ch: [] for ch in run_data}
 
-            for idx in range(len(fz)):
-                if used[idx] or sa[idx] < 0:
+            for s, e in zip(breaks[:-1], breaks[1:]):
+                n = e - s
+                if n < 2 * k + 1:
                     continue
 
-                mask = (~used) & (np.abs(fz - fz[idx]) < fz_match_tol) & (np.abs(ia - ia[idx]) < ia_match_tol)
-                mask[idx] = False  # don't match to self
-                candidate_idxs = np.where(mask)[0]
+                seg = {ch: np.asarray(run_data[ch])[s:e] for ch in run_data}
 
-                if len(candidate_idxs) == 0:
-                    continue
+                # smoothed sweep rate, deg/s
+                i = np.arange(n)
+                lo, hi = np.clip(i - k, 0, n - 1), np.clip(i + k, 0, n - 1)
+                rate = (seg["SA"][hi] - seg["SA"][lo]) / (seg["ET"][hi] - seg["ET"][lo])
 
-                mirrored_idx = candidate_idxs[np.argmin(np.abs(sa[candidate_idxs] + sa[idx]))]
-                if abs(sa[mirrored_idx] + sa[idx]) > sa_match_tol:
-                    continue
+                key = np.round(seg["SA"] / sa_bin).astype(int)
+                key -= key.min()
+                n_bins = key.max() + 1
 
-                used[idx] = used[mirrored_idx] = True
-                fy_avg = (abs(fy[idx]) + abs(fy[mirrored_idx])) / 2.0
+                # drop dwells / turnarounds, bin each direction separately
+                passes = []
+                for m in (rate > min_rate, rate < -min_rate):
+                    cnt = np.bincount(key[m], minlength=n_bins)
+                    avg = {ch: np.bincount(key[m], weights=seg[ch][m], minlength=n_bins) / np.maximum(cnt, 1) for ch in seg}
+                    passes.append((cnt, avg))
 
-                for i, fy_val in ((idx, -fy_avg), (mirrored_idx, fy_avg)):
-                    for ch in run_data:
-                        out[ch].append(np.asarray(run_data[ch])[i] if ch != "FY" else fy_val)
+                both = (passes[0][0] > 0) & (passes[1][0] > 0)
+                for ch in seg:
+                    out[ch].append(0.5 * (passes[0][1][ch][both] + passes[1][1][ch][both]))
 
-            result = {ch: np.asarray(v) for ch, v in out.items()}
+            result = {ch: np.concatenate(v) for ch, v in out.items()}
 
             sort_idx = np.argsort(result["ET"])
             return {ch: v[sort_idx] for ch, v in result.items()}
@@ -391,15 +423,7 @@ class Tire:
             if len(sa_data) > 0:
                 ax.scatter(sa_data, fy_data, s=5, color=cmap(j), alpha=0.10)
 
-            query_points = np.transpose(
-                np.array([
-                    SA_RANGE,
-                    curr_fz * np.ones_like(SA_RANGE),
-                    ia * np.ones_like(SA_RANGE),
-                    p * np.ones_like(SA_RANGE) 
-                ])
-            )
-            fy_pred = self.lat_surface(query_points)
+            fy_pred = self._eval_lat_mf52(SA_RANGE, ia, curr_fz, p)
             ax.plot(SA_RANGE, fy_pred, color=cmap(j), linewidth=2, label=f"F_Z = {curr_fz:g} N")
 
         ax.axhline(0, linestyle="--", color="k", alpha=0.25)
@@ -428,15 +452,7 @@ class Tire:
             if len(sa_data) > 0:
                 ax.scatter(sa_data, fy_data, s=5, color=cmap(j), alpha=0.50)
 
-            query_points = np.transpose(
-                np.array([
-                    SA_RANGE,
-                    fz * np.ones_like(SA_RANGE),
-                    curr_ia * np.ones_like(SA_RANGE),
-                    p * np.ones_like(SA_RANGE) 
-                ])
-            )
-            fy_pred = self.lat_surface(query_points)
+            fy_pred = self._eval_lat_mf52(SA_RANGE, curr_ia, fz, p)
             ax.plot(SA_RANGE, fy_pred, color=cmap(j), linewidth=2, label=f"IA = {curr_ia:g} N")
 
         ax.axhline(0, linestyle="--", color="k", alpha=0.25)
@@ -465,15 +481,7 @@ class Tire:
             if len(sa_data) > 0:
                 ax.scatter(sa_data, fy_data, s=5, color=cmap(j), alpha=0.50)
 
-            query_points = np.transpose(
-                np.array([
-                    SA_RANGE,
-                    fz * np.ones_like(SA_RANGE),
-                    ia * np.ones_like(SA_RANGE),
-                    curr_p * np.ones_like(SA_RANGE) 
-                ])
-            )
-            fy_pred = self.lat_surface(query_points)
+            fy_pred = self._eval_lat_mf52(SA_RANGE, ia, fz, curr_p)
             ax.plot(SA_RANGE, fy_pred, color=cmap(j), linewidth=2, label=f"P = {curr_p:g} N")
 
         ax.axhline(0, linestyle="--", color="k", alpha=0.25)
@@ -491,140 +499,37 @@ class Tire:
 
     # ---------- Fitting Coefficients ----------
 
-    @DeprecationWarning
-    def fit_lat_mf52(self, fz0=None, verbose=True):
-        """
-        Fit MF 5.2 pure-slip lateral coefficients (Table 10, TNO MF-Tyre/MF-Swift
-        convention) via bounded nonlinear least squares.
+    def fit_lat_mf52(self, pressures=P_BUCKETS):
+        # fits all 18 mf5.2 lateral coeffs in one least squares, one set per tested pressure
+        self.lat_mf52_coeffs = dict()
 
-        Model:
-            Cy  = pCy1
-            muy = (pDy1 + pDy2*dfz) * (1 - pDy3*gamma^2)
-            Dy  = muy * Fz
-            Ey  = (pEy1 + pEy2*dfz) * (1 - (pEy3 + pEy4*gamma)*sign(alpha))   [Ey <= 1]
-            Ky  = pKy1*Fz0 * sin(2*arctan(Fz / (pKy2*Fz0))) * (1 - pKy3*|gamma|)
-            By  = Ky / (Cy*Dy)
-            SHy = (pHy1 + pHy2*dfz) + pHy3*gamma
-            SVy = Fz * ((pVy1 + pVy2*dfz) + (pVy3 + pVy4*dfz)*gamma)
-            alpha_y = alpha + SHy
-            Fy0 = Dy*sin(Cy*arctan(By*alpha_y - Ey*(By*alpha_y - arctan(By*alpha_y)))) + SVy
-
-        All lambda_* scaling factors are fixed at 1.0 (not fit). alpha, gamma
-        are converted from degrees (as stored in run_data) to radians internally.
-
-        Args:
-            fz0: nominal load, N. Defaults to the median FZ in the dataset.
-
-        Returns:
-            dict of fitted pCy1, pDy1-3, pEy1-4, pKy1-3, pHy1-3, pVy1-4
-        """
-
-        spline_results = self.fit_lat_spline()
-        first_stage_coeffs = dict()
-
-
-        for (fz, ia) in spline_results:
-            first_stage_coeffs[(fz, ia)] = self.fit_lat_mf4(spline_results[(fz, ia)][0], ia, fz, spline_results[(fz, ia)][1])
-
-
-        base = {k: v for k, v in first_stage_coeffs.items() if k[1] == 0.0}
-        fz_arr = np.array([k[0] for k in base])
-        D_arr = np.array([v["D"] for v in base.values()])
-        B_arr = np.array([v["B"] for v in base.values()])
-        C_arr = np.array([v["C"] for v in base.values()])
-        Ky_arr = B_arr * C_arr * D_arr
-        SH_arr = np.array([v["SH"] for v in base.values()])
-        SV_arr = np.array([v["SV"] for v in base.values()])
-        Ey_pos_arr = np.array([v["E_pos"] for v in base.values()])
-        Ey_neg_arr = np.array([v["E_neg"] for v in base.values()])
-
-        # pCy1: just average the per-bucket C (should be fairly load-independent)
-        pCy1 = float(np.mean(C_arr))
-
-        if fz0 is None:
-            fz0 = float(np.median(fz_arr))
-        dfz_arr = (fz_arr - fz0) / fz0
-
-        # pDy1, pDy2: muy = pDy1 + pDy2*dfz  (fit at gamma=0, so pDy3 term drops out)
-        muy_arr = D_arr / fz_arr
-        pDy2, pDy1 = np.polyfit(dfz_arr, muy_arr, 1)  # returns [slope, intercept]
-
-        # pKy1, pKy2: Ky = pKy1*Fz0*sin(2*atan(Fz/(pKy2*Fz0)))  -- nonlinear, small fit
-        def ky_resid(p):
-            pKy1, pKy2 = p
-            return pKy1 * fz0 * np.sin(2 * np.arctan(fz_arr / (pKy2 * fz0))) - Ky_arr
-
-        ky_guess = np.clip(Ky_arr[-1] / fz0, 0.15, 195.0)
-        ky_fit = least_squares(ky_resid, x0=[ky_guess, 1.0], bounds=([0.1, 0.1], [200, 20]))
-        pKy1, pKy2 = ky_fit.x
-
-        # pHy1, pHy2: SH = pHy1 + pHy2*dfz
-        pHy2, pHy1 = np.polyfit(dfz_arr, SH_arr, 1)
-
-        # pVy1, pVy2: SV/Fz = pVy1 + pVy2*dfz
-        pVy2, pVy1 = np.polyfit(dfz_arr, SV_arr / fz_arr, 1)
-
-        # pEy1, pEy2: Ey = pEy1 + pEy2*dfz  (at gamma=0, sign(alpha) folded in separately if you want per-sign E)
-        Ey_base_arr = (Ey_pos_arr + Ey_neg_arr) / 2.0
-        pEy2, pEy1 = np.polyfit(dfz_arr, Ey_base_arr, 1)
-        pEy3_gamma0 = float(np.mean((Ey_neg_arr - Ey_pos_arr) / (Ey_pos_arr + Ey_neg_arr + 1e-12)))
-
-        # print(f"pCy1={pCy1:.4f}  pDy1={pDy1:.4f} pDy2={pDy2:.4f}  pKy1={pKy1:.4f} pKy2={pKy2:.4f}")
-        # print(f"pHy1={pHy1:.4f} pHy2={pHy2:.4f}  pVy1={pVy1:.4f} pVy2={pVy2:.4f}  pEy1={pEy1:.4f} pEy2={pEy2:.4f}")
-
-        pDy3_samples, pKy3_samples, pHy3_samples, ey_ratio_samples, gamma_for_ey = [], [], [], [], []
-        pVy_diff_samples, pVy_dfz_samples = [], []
-
-        for (fz, ia), v in first_stage_coeffs.items():
-            if ia == 0.0:
+        for p in pressures:
+            idx = np.abs(self.run_data["P"] - p) < P_TOL
+            if idx.sum() < LAT_MF52_MIN_POINTS:
                 continue
 
-            gamma = ia
-            dfz = (fz - fz0) / fz0
+            alpha = np.deg2rad(self.run_data["SA"][idx])
+            gamma = np.deg2rad(self.run_data["IA"][idx])
+            fz = self.run_data["FZ"][idx]
+            fy = self.run_data["FY"][idx]
+            fz0 = float(np.round(np.median(fz), -1))
 
-            # --- pDy3: muy = (pDy1+pDy2*dfz)*(1 - pDy3*gamma^2)
-            muy = v["D"] / fz
-            base_muy = pDy1 + pDy2 * dfz
-            if abs(base_muy) > 1e-6:
-                pDy3_samples.append((1 - muy / base_muy) / gamma**2)
+            result = least_squares(
+                lambda x: self._lat_mf52_model(x, alpha, gamma, fz, fz0) - fy,
+                LAT_MF52_X0, bounds=(LAT_MF52_LB, LAT_MF52_UB),
+                x_scale="jac", loss="soft_l1", f_scale=50, max_nfev=20000)
 
-            # --- pKy3: Ky = Ky_base(Fz) * (1 - pKy3*|gamma|)
-            Ky_meas = v["B"] * v["C"] * v["D"]
-            Ky_base = pKy1 * fz0 * np.sin(2 * np.arctan(fz / (pKy2 * fz0)))
-            if abs(Ky_base) > 1e-6:
-                pKy3_samples.append((1 - Ky_meas / Ky_base) / abs(gamma))
+            resid = self._lat_mf52_model(result.x, alpha, gamma, fz, fz0) - fy
 
-            # --- pHy3: SH = (pHy1+pHy2*dfz) + pHy3*gamma
-            base_SH = pHy1 + pHy2 * dfz
-            pHy3_samples.append((v["SH"] - base_SH) / gamma)
+            coeffs = dict(zip(LAT_MF52_COEFF_NAMES, result.x))
+            coeffs["fz0"] = fz0
+            coeffs["rms"] = float(np.sqrt(np.mean(resid**2)))
+            self.lat_mf52_coeffs[float(p)] = coeffs
 
-            # --- pVy3, pVy4: SV/Fz = (pVy1+pVy2*dfz) + (pVy3+pVy4*dfz)*gamma
-            base_SVfz = pVy1 + pVy2 * dfz
-            slope_term = ((v["SV"] / fz) - base_SVfz) / gamma   # == pVy3 + pVy4*dfz
-            pVy_diff_samples.append(slope_term)
-            pVy_dfz_samples.append(dfz)
+        if not self.lat_mf52_coeffs:
+            raise ValueError("Not enough points to construct an mf5.2 fit")
 
-            # --- pEy3, pEy4: ratio = pEy3 + pEy4*gamma, where
-            # ratio = (Ey_neg - Ey_pos) / (Ey_pos + Ey_neg)
-            denom = v["E_pos"] + v["E_neg"]
-            if abs(denom) > 1e-6:
-                ey_ratio_samples.append((v["E_neg"] - v["E_pos"]) / denom)
-                gamma_for_ey.append(gamma)
-
-        pDy3 = float(np.median(pDy3_samples)) if pDy3_samples else 0.0
-        pKy3 = float(np.median(pKy3_samples)) if pKy3_samples else 0.0
-        pHy3 = float(np.median(pHy3_samples)) if pHy3_samples else 0.0
-
-        pVy4, pVy3 = np.polyfit(pVy_dfz_samples, pVy_diff_samples, 1) if len(pVy_dfz_samples) > 1 else (0.0, 0.0)
-        pEy4, pEy3 = np.polyfit(gamma_for_ey, ey_ratio_samples, 1) if len(gamma_for_ey) > 1 else (0.0, float(pEy3_gamma0))
-
-        fitted = [pCy1, pDy1, pDy2, pDy3, pEy1, pEy2, pEy3, pEy4, pKy1, pKy2, pKy3, pHy1, pHy2, pHy3, pVy1, pVy2, pVy3, pVy4, fz0]
-        self.lat_mf52_coeffs = dict(zip(LAT_MF52_COEFF_NAMES, fitted))
-
-        savemat(self.coeffs_path, {
-            "coeff_names": LAT_MF52_COEFF_NAMES,
-            "coeff_values": fitted,
-        })
+        return self.lat_mf52_coeffs
 
 
     def fit_lat_spline(self):
@@ -716,7 +621,7 @@ if __name__ == "__main__":
 
     tire.setup()
 
-    result = tire.calculate_lat_force_surface(5, 0.5, 1000, 68.9476)
+    result = tire.calculate_lat_force_mf52(5, 0.5, 1000, 68.9476)
 
     tire.plot_fy_over_sa_per_fz("lateral", "Fy vs SA per Fz", [180, 400, 630, 1000], 4, 82.7371)
     tire.plot_fy_over_sa_per_ia("lateral", "Fy vs SA per IA", 1000, [0, 1], 82.7371)
