@@ -35,6 +35,9 @@ FZ_BUCKETS = [230, 400, 630, 900, 1100]
 IA_BUCKETS = [0, 2, 4]
 P_BUCKETS = [41.3685, 55.1581, 68.9476, 82.7371, 96.5266] # in kPa (when hot) - (6, 8, 10, 12, 14) psi choices
 
+# ordinal blue ramp, light -> heavy load
+LOAD_RAMP = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281"]
+
 FZ_TOL = 50
 IA_TOL = 0.5
 P_TOL = 5
@@ -496,6 +499,50 @@ class Tire:
         fig.savefig(Path(Path.cwd() / f"figures/tyres/{category}/[{self.run_id}] {title} @ FZ = {fz}, IA = {ia}.png").expanduser().resolve())
 
 
+    def plot_peak_mu_over_ia(self, category, title, fz_buckets, p_buckets, ia_max=4):
+        # camber thrust is +fy for +ia in this data, so the +fy peak is the leaning-into-turn side
+        sa = np.linspace(-12, 12, 1201)[:, None] # tested sa range only
+        ia = np.linspace(0, ia_max, 41)[None, :]
+        colors = [LOAD_RAMP[i] for i in np.linspace(0, len(LOAD_RAMP) - 1, len(fz_buckets)).round().astype(int)]
+
+        fig, axes = plt.subplots(1, len(p_buckets), figsize=(6 * len(p_buckets), 5.5), sharey=True, squeeze=False)
+        axes = axes[0]
+
+        for ax, p in zip(axes, p_buckets):
+            for j, fz in enumerate(fz_buckets):
+                fy = self._eval_lat_mf52(sa, ia, fz, p)
+                ax.plot(ia[0], fy.max(axis=0) / fz, color=colors[j], linewidth=2, label=f"F_Z = {fz:g} N")
+                ax.plot(-ia[0], -fy.min(axis=0) / fz, color=colors[j], linewidth=2)
+
+            ax.axvline(0, color="k", linewidth=0.8, alpha=0.25)
+            ax.set_xlabel("camber [deg]  (+ leaning into turn, − leaning away)")
+            ax.set_title(f"P = {p:.0f} kPa ({p / 6.89476:.0f} psi)")
+            ax.grid(True, alpha=0.3)
+
+        # measured peaks, one pair per sweep
+        d = self.run_data
+        breaks = np.r_[0, np.where(np.diff(d["ET"]) > 5)[0] + 1, len(d["ET"])]
+        for s, e in zip(breaks[:-1], breaks[1:]):
+            fz, ia_sweep, p = d["FZ"][s:e].mean(), d["IA"][s:e].mean(), d["P"][s:e].mean()
+            j = np.argmin(np.abs(np.asarray(fz_buckets) - fz))
+            k = np.argmin(np.abs(np.asarray(p_buckets) - p))
+            if abs(fz_buckets[j] - fz) > FZ_TOL or abs(p_buckets[k] - p) > P_TOL:
+                continue
+
+            axes[k].scatter([ia_sweep, -ia_sweep], [d["FY"][s:e].max() / fz, -d["FY"][s:e].min() / fz],
+                            s=40, color=colors[j], edgecolors="white", linewidths=1, zorder=3)
+
+        axes[0].set_ylabel("peak μ_y  [F_Y,peak / F_Z]")
+        handles, labels = axes[0].get_legend_handles_labels()
+        handles.append(plt.Line2D([], [], color="gray", marker="o", linestyle="none", markeredgecolor="white"))
+        labels.append("measured sweep peak")
+        fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
+
+        fig.suptitle(f"[{self.run_id}] {title} (mf5.2 fit, unscaled)")
+        fig.tight_layout(rect=(0, 0.06, 1, 1))
+        fig.savefig(Path(Path.cwd() / f"figures/tyres/{category}/[{self.run_id}] {title}.png").expanduser().resolve())
+
+
 
     # ---------- Fitting Coefficients ----------
 
@@ -626,3 +673,4 @@ if __name__ == "__main__":
     tire.plot_fy_over_sa_per_fz("lateral", "Fy vs SA per Fz", [180, 400, 630, 1000], 4, 82.7371)
     tire.plot_fy_over_sa_per_ia("lateral", "Fy vs SA per IA", 1000, [0, 1], 82.7371)
     tire.plot_fy_over_sa_per_p("lateral", "Fy VS SA per P", 1000, 1.5, P_BUCKETS)
+    tire.plot_peak_mu_over_ia("lateral", "Peak mu vs IA per Fz", [220, 440, 665, 890, 1110], sorted(tire.lat_mf52_coeffs))
