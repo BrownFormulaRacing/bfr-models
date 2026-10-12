@@ -1,10 +1,12 @@
 # manual mf5.2 lateral tuner: sliders for all 18 coeffs over the measured data.
 # defaults are the fitted coeffs from tire.py, save writes a separate _tuned file.
-# run from repo root: python -m src.models.tire_tuner
+# run from repo root: python -m src.models.tire_tuner [--scale 1.25]
 
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, TextBox, RadioButtons, CheckButtons, Button
+from matplotlib.transforms import Bbox
 
 from .tire import Tire, LAT_MF52_COEFF_NAMES, LAT_MF52_LB, LAT_MF52_UB, SA_RANGE, IA_BUCKETS, FZ_TOL, IA_TOL, P_TOL
 from ..utils.files import DEFAULT_LAT_MF52_TUNED_COEFFS_PATH
@@ -22,13 +24,23 @@ IA_COLORS = ["#f2a07a", "#eb6834", "#b4471c"] # 0 -> 4 deg
 GROUPS = [("C  shape", 1), ("D  peak mu", 3), ("E  curvature", 4),
           ("K  cornering stiffness", 3), ("H  horizontal shift", 3), ("V  vertical shift", 4)]
 
+FIG_SIZE = (16, 9)
+BASE_DPI = 80 # 1280x720 window at scale 1, fits a 13" laptop
 HEADER_H = 0.022
 ROW_H = 0.0435
 
 
+class LazyTextBox(TextBox):
+    # stock stop_typing does a full canvas.draw() per box on every click anywhere
+    def stop_typing(self):
+        if self.capturekeystrokes:
+            super().stop_typing()
+
+
 class Tuner:
-    def __init__(self, tire):
+    def __init__(self, tire, scale=1.0):
         self.tire = tire
+        self.scale = scale
         self.d = tire.run_data
 
         self.pressures = sorted(tire.lat_mf52_coeffs)
@@ -64,7 +76,7 @@ class Tuner:
     # ---------- layout ----------
 
     def build(self):
-        self.fig = plt.figure(figsize=(17, 9.5))
+        self.fig = plt.figure(figsize=FIG_SIZE, dpi=BASE_DPI * self.scale)
         if self.fig.canvas.manager is not None:
             self.fig.canvas.manager.set_window_title(f"[{self.tire.run_id}] mf5.2 lateral tuner")
 
@@ -75,6 +87,19 @@ class Tuner:
 
         self.build_controls()
         self.build_sliders()
+
+        # full redraws are ~200 ms, so dragging only blits the regions that change.
+        # region key -> animated artists in it, later artists draw on top
+        self.anim = {"fz": [*self.fz_fits, *self.fz_lines], "ia": [*self.ia_fits, *self.ia_lines], "rms": [self.rms_text]}
+        for i, (sl, tb) in enumerate(zip(self.sliders, self.boxes)):
+            tb.text_disp.set_clip_box(tb.ax.bbox)
+            self.anim[i] = [sl.poly, sl.vline, sl._handle, tb.text_disp]
+        for arts in self.anim.values():
+            for a in arts:
+                a.set_animated(True)
+
+        self.bgs = None
+        self.fig.canvas.mpl_connect("draw_event", self.on_draw)
 
 
     def make_series(self, ax, colors, labels):
@@ -116,7 +141,7 @@ class Tuner:
         self.r_fz.on_clicked(lambda label: self.set_fz(TEST_FZ[fz_labels.index(label)]))
 
         ax = self.fig.add_axes([x, 0.25, w, 0.05])
-        self.c_fit = CheckButtons(ax, ["show fit (dashed)"], [self.show_fit])
+        self.c_fit = CheckButtons(ax, ["show fit"], [self.show_fit])
         self.c_fit.on_clicked(self.toggle_fit)
 
         self.rms_text = self.fig.text(x, 0.19, "", fontsize=9, va="top", family="monospace")
@@ -146,9 +171,12 @@ class Tuner:
                 s = Slider(self.fig.add_axes([0.73, y, 0.185, ROW_H * 0.6]), LAT_MF52_COEFF_NAMES[i],
                            lo[i], hi[i], valinit=v, initcolor="0.35")
                 s.valtext.set_visible(False)
+                s.drawon = False
                 s.on_changed(lambda val, i=i: self.on_slide(i, val))
 
-                tb = TextBox(self.fig.add_axes([0.925, y, 0.065, ROW_H * 0.6]), "", initial=f"{v:.6g}")
+                # hovercolor = color so hovering doesn't force a redraw
+                tb = LazyTextBox(self.fig.add_axes([0.925, y, 0.065, ROW_H * 0.6]), "", initial=f"{v:.6g}",
+                                 color=".95", hovercolor=".95")
                 tb.on_submit(lambda text, i=i: self.on_type(i, text))
 
                 self.sliders.append(s)
@@ -162,9 +190,13 @@ class Tuner:
         self.tuned[self.p][i] = val
         self.set_text(i, val)
         self.update_curves()
+        self.refresh(i)
 
 
     def on_type(self, i, text):
+        # clicking out of an untouched box shouldn't round the value
+        if text.strip() == f"{self.tuned[self.p][i]:.6g}":
+            return
         try:
             val = float(text)
         except ValueError:
@@ -179,14 +211,13 @@ class Tuner:
             s.valmin, s.valmax = min(s.valmin, val), max(s.valmax, val)
             s.ax.set_xlim(s.valmin, s.valmax)
             s.poly.set_x(s.valmin)
+            self.fig.canvas.draw_idle()
         s.set_val(val)
 
 
     def set_text(self, i, val):
-        tb = self.boxes[i]
-        tb.eventson = False
-        tb.set_val(f"{val:.6g}")
-        tb.eventson = True
+        # skip TextBox.set_val, it does a full sync redraw
+        self.boxes[i].text_disp.set_text(f"{val:.6g}")
 
 
     def set_p(self, p):
@@ -198,17 +229,20 @@ class Tuner:
         self.ia = ia
         self.update_data()
         self.update_curves()
+        self.fig.canvas.draw_idle()
 
 
     def set_fz(self, fz):
         self.fz = fz
         self.update_data()
         self.update_curves()
+        self.fig.canvas.draw_idle()
 
 
     def toggle_fit(self, _):
         self.show_fit = not self.show_fit
         self.update_curves()
+        self.refresh()
 
 
     def reset(self, _):
@@ -257,6 +291,7 @@ class Tuner:
 
         self.update_data()
         self.update_curves()
+        self.fig.canvas.draw_idle()
 
 
     def update_data(self):
@@ -292,15 +327,51 @@ class Tuner:
         self.rms_text.set_text(f"rms @ {self.p / KPA_PER_PSI:.0f} psi\n"
                                f"tuned {self.rms(self.p, vals):6.1f} N\n"
                                f"fit   {self.fit_rms[self.p]:6.1f} N")
-        self.fig.canvas.draw_idle()
+
+
+    def on_draw(self, _):
+        # cache the static background of each region, then draw the animated artists on it
+        cv = self.fig.canvas
+        pad = 8 * self.fig.dpi / 72 # slider handle overhangs the track ends
+        boxes = {"fz": self.ax_fz.bbox, "ia": self.ax_ia.bbox,
+                 "rms": self.rms_text.get_window_extent(cv.get_renderer()).padded(pad)}
+        for i, (sl, tb) in enumerate(zip(self.sliders, self.boxes)):
+            b = sl.ax.bbox
+            boxes[i] = Bbox.union([Bbox.from_extents(b.x0 - pad, b.y0, b.x1 + pad, b.y1), tb.ax.bbox])
+
+        # +2 px so antialiased edges are inside the cached region
+        self.bgs = {k: cv.copy_from_bbox(b.padded(2)) for k, b in boxes.items()}
+        for arts in self.anim.values():
+            for a in arts:
+                self.fig.draw_artist(a)
+
+
+    def refresh(self, row=None):
+        # redraw plots + rms, and slider row if given
+        cv = self.fig.canvas
+        if self.bgs is None or not cv.supports_blit:
+            cv.draw_idle()
+            return
+
+        for k in ["fz", "ia", "rms"] + ([row] if row is not None else []):
+            cv.restore_region(self.bgs[k])
+            for a in self.anim[k]:
+                self.fig.draw_artist(a)
+        cv.blit(self.fig.bbox)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="manual mf5.2 lateral tuner")
+    parser.add_argument("--scale", type=float, default=1.0, help="window scale, 1 = 1280x720")
+    args = parser.parse_args()
+    if args.scale <= 0:
+        parser.error("--scale must be positive")
+
     tire = Tire()
     tire.setup()
 
     if getattr(tire, "run_data", None) is None or not tire.lat_mf52_coeffs:
         raise SystemExit("couldn't load tire data or mf5.2 coeffs, make sure you run this from the repo root")
 
-    tuner = Tuner(tire)
+    tuner = Tuner(tire, scale=args.scale)
     plt.show()
