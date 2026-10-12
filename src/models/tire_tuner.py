@@ -90,7 +90,8 @@ class Tuner:
 
         # full redraws are ~200 ms, so dragging only blits the regions that change.
         # region key -> animated artists in it, later artists draw on top
-        self.anim = {"fz": [*self.fz_fits, *self.fz_lines], "ia": [*self.ia_fits, *self.ia_lines], "rms": [self.rms_text]}
+        self.anim = {"fz": [*self.fz_lines, *self.fz_fits], "ia": [*self.ia_lines, *self.ia_fits], "rms": [self.rms_text],
+                     "alpha": [self.s_alpha.poly, self.s_alpha._handle]}
         for i, (sl, tb) in enumerate(zip(self.sliders, self.boxes)):
             tb.text_disp.set_clip_box(tb.ax.bbox)
             self.anim[i] = [sl.poly, sl.vline, sl._handle, tb.text_disp]
@@ -106,8 +107,9 @@ class Tuner:
         dots, fits, lines = [], [], []
         for c, label in zip(colors, labels):
             dots.append(ax.scatter(np.empty(0), np.empty(0), s=6, color=c, alpha=0.35))
-            fits.append(ax.plot([], [], color=c, lw=1, ls="--", alpha=0.8)[0])
             lines.append(ax.plot([], [], color=c, lw=2, label=label)[0])
+            # dark dashes so the original fit shows even when tuned == fit
+            fits.append(ax.plot([], [], color="0.15", lw=1.2, ls=(0, (4, 3)), alpha=0.9)[0])
 
         ax.axhline(0, linestyle="--", color="k", alpha=0.25)
         ax.axvline(0, linestyle="--", color="k", alpha=0.25)
@@ -140,16 +142,24 @@ class Tuner:
         self.r_fz = RadioButtons(ax, fz_labels, active=TEST_FZ.index(self.fz))
         self.r_fz.on_clicked(lambda label: self.set_fz(TEST_FZ[fz_labels.index(label)]))
 
-        ax = self.fig.add_axes([x, 0.25, w, 0.05])
+        ax = self.fig.add_axes([x, 0.265, w, 0.045])
         self.c_fit = CheckButtons(ax, ["show fit"], [self.show_fit])
         self.c_fit.on_clicked(self.toggle_fit)
 
-        self.rms_text = self.fig.text(x, 0.19, "", fontsize=9, va="top", family="monospace")
-        self.status_text = self.fig.text(x, 0.025, "", fontsize=8, color="0.4")
+        # opacity of the tuned curves, 0 hides them
+        self.fig.text(x, 0.243, "curve opacity", fontsize=9)
+        self.s_alpha = Slider(self.fig.add_axes([x + 0.005, 0.215, w - 0.01, 0.02]), "", 0, 1,
+                              valinit=1, initcolor="none")
+        self.s_alpha.valtext.set_visible(False)
+        self.s_alpha.drawon = False
+        self.s_alpha.on_changed(self.set_line_alpha)
 
-        self.b_reset = Button(self.fig.add_axes([x, 0.10, w, 0.04]), "reset to fit")
+        self.rms_text = self.fig.text(x, 0.195, "", fontsize=9, va="top", family="monospace")
+        self.status_text = self.fig.text(x, 0.015, "", fontsize=8, color="0.4")
+
+        self.b_reset = Button(self.fig.add_axes([x, 0.085, w, 0.04]), "reset to fit")
         self.b_reset.on_clicked(self.reset)
-        self.b_save = Button(self.fig.add_axes([x, 0.05, w, 0.04]), "save tuned")
+        self.b_save = Button(self.fig.add_axes([x, 0.035, w, 0.04]), "save tuned")
         self.b_save.on_clicked(self.save)
 
 
@@ -237,6 +247,12 @@ class Tuner:
         self.update_data()
         self.update_curves()
         self.fig.canvas.draw_idle()
+
+
+    def set_line_alpha(self, val):
+        for line in self.fz_lines + self.ia_lines:
+            line.set_alpha(val)
+        self.refresh("alpha")
 
 
     def toggle_fit(self, _):
@@ -338,6 +354,8 @@ class Tuner:
         for i, (sl, tb) in enumerate(zip(self.sliders, self.boxes)):
             b = sl.ax.bbox
             boxes[i] = Bbox.union([Bbox.from_extents(b.x0 - pad, b.y0, b.x1 + pad, b.y1), tb.ax.bbox])
+        b = self.s_alpha.ax.bbox
+        boxes["alpha"] = Bbox.from_extents(b.x0 - pad, b.y0, b.x1 + pad, b.y1)
 
         # +2 px so antialiased edges are inside the cached region
         self.bgs = {k: cv.copy_from_bbox(b.padded(2)) for k, b in boxes.items()}
@@ -347,7 +365,7 @@ class Tuner:
 
 
     def refresh(self, row=None):
-        # redraw plots + rms, and slider row if given
+        # redraw plots + rms, plus one slider region if given
         cv = self.fig.canvas
         if self.bgs is None or not cv.supports_blit:
             cv.draw_idle()
