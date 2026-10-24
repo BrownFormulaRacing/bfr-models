@@ -1,0 +1,11 @@
+{
+    "settings": [
+        {
+            "name": "Default",
+            "description": "Standard default car setting",
+            "cla" : 2.84,
+            "cda" : 1.0,
+            "cop" : 0.5
+        }
+    ]
+}
