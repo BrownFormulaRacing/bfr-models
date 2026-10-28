@@ -9,6 +9,7 @@ Common commands (work with every runner):
     --schema                         list ARD's simulation types and POST /sweeps fields (no key needed)
     --list-presets                   saved simulation/sweep configs from the app
     --list-params VEHICLE AMBIENT    sweepable parameter paths (add --search spring)
+    --list-components TYPE           ids of your Tracks, Ambient Conditions, Vehicles... (add --search)
     --show-sweeps                    print each sweep after merging with defaults (no key needed)
 """
 import argparse
@@ -117,6 +118,12 @@ class ARDClient:
     def status(self, sim_id):       return self.request("GET", f"/simulation-status/{sim_id}")
     def sweep_table(self, sim_id):  return self.request("GET", f"/simulations/{sim_id}/sweep-table")
     def cancel(self, sim_id):       return self.request("POST", f"/simulations/{sim_id}/cancel")
+
+    def list_components(self, component_type, search=None, limit=100):
+        params = {"component_type": component_type, "limit": limit}
+        if search:
+            params["search"] = search
+        return self.request("GET", "/components", params=params)
 
     def sweepable_params(self, vehicle_id, ambient_id, search=None, kind="all"):
         params = {"ambient_conditions_id": ambient_id, "kind": kind}
@@ -468,7 +475,9 @@ def main(spec: RunnerSpec):
     p.add_argument("--list-presets", action="store_true", help="print saved simulation/sweep configs")
     p.add_argument("--list-params", nargs=2, metavar=("VEHICLE_ID", "AMBIENT_ID"),
                    help="print sweepable parameter paths for a vehicle")
-    p.add_argument("--search", help="filter for --list-params (e.g. 'spring', 'wing')")
+    p.add_argument("--list-components", metavar="TYPE",
+                   help="list your components with their ids, e.g. Track, 'Ambient Conditions', Vehicle")
+    p.add_argument("--search", help="filter for --list-params / --list-components (e.g. 'spring', 'Silverstone')")
     p.add_argument("--show-sweeps", action="store_true", help="print each sweep after merging with defaults")
     p.add_argument("--force", action="store_true", help="run even if the simulation type check fails")
     args = p.parse_args()
@@ -494,6 +503,16 @@ def main(spec: RunnerSpec):
         return
     if args.list_presets:
         print(json.dumps(client.presets(), indent=2))
+        return
+    if args.list_components:
+        resp = client.list_components(args.list_components, search=args.search)
+        items = resp if isinstance(resp, list) else find_key(resp, ["items", "results", "components", "data"])
+        if not isinstance(items, list):
+            print(json.dumps(resp, indent=2))  # unknown shape (or ARD listing the valid types): show as-is
+            return
+        print(f"{'id':>8}  {'version':>7}  name")
+        for c in items:
+            print(f"{c.get('id', '?'):>8}  {c.get('version_number', ''):>7}  {c.get('name', '')}")
         return
     if args.list_params:
         vid, aid = (int(x) for x in args.list_params)
