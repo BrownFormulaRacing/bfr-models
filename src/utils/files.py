@@ -21,9 +21,12 @@ DEFAULT_LAT_COEFFS_FILE = "hoosier_r20_lat_surface.mat"
 DEFAULT_LAT_MF52_COEFFS_FILE = "hoosier_r20_lat_mf52_coeffs.mat"
 DEFAULT_LAT_MF52_TUNED_COEFFS_FILE = "hoosier_r20_lat_mf52_coeffs_tuned.mat"
 DEFAULT_LONG_MF52_COEFFS_FILE = "hoosier_r20_long_mf52_coeffs.mat"
+DEFAULT_MZ_MF52_COEFFS_FILE = "hoosier_r20_mz_mf52_coeffs.mat"
 
 # Constants
 DEFAULT_RUN_ID = "B2356run8"
+DEFAULT_MZ_RUN_IDS = ["B2356run8", "B2356run9"]
+DEFAULT_MZ_RUN_TAG = "B2356run8+9"
 
 # Paths
 SUSPENSION_DEFAULT_CONFIG_PATH = Path(Path.cwd() / f"{SUSPENSION_CONFIG_DIR}{DEFAULT_CONFIG_FILE}").expanduser().resolve()
@@ -35,5 +38,7 @@ DEFAULT_LAT_COEFFS_PATH = Path(Path.cwd() / f"{LAT_COEFFS_DIR}[{DEFAULT_RUN_ID}]
 DEFAULT_LAT_MF52_COEFFS_PATH = Path(Path.cwd() / f"{LAT_COEFFS_DIR}[{DEFAULT_RUN_ID}] {DEFAULT_LAT_MF52_COEFFS_FILE}").expanduser().resolve()
 DEFAULT_LAT_MF52_TUNED_COEFFS_PATH = Path(Path.cwd() / f"{LAT_COEFFS_DIR}[{DEFAULT_RUN_ID}] {DEFAULT_LAT_MF52_TUNED_COEFFS_FILE}").expanduser().resolve()
 DEFAULT_LONG_MF52_COEFFS_PATH = Path(Path.cwd() / f"{LONG_COEFFS_DIR}[{DEFAULT_RUN_ID}] {DEFAULT_LONG_MF52_COEFFS_FILE}").expanduser().resolve()
+DEFAULT_MZ_MF52_COEFFS_PATH = Path(Path.cwd() / f"{LAT_COEFFS_DIR}[{DEFAULT_MZ_RUN_TAG}] {DEFAULT_MZ_MF52_COEFFS_FILE}").expanduser().resolve()
 DEFAULT_LAT_SURFACE_PATH = Path(Path.cwd() / f"{LAT_SURFACE_DIR}[{DEFAULT_RUN_ID}] {DEFAULT_LAT_SURFACE_FILE}").expanduser().resolve()
 DEFAULT_LAT_DATA_PATH = Path(Path.cwd() / f"{LAT_DATA_DIR}{DEFAULT_RUN_ID}.mat").expanduser().resolve()
+DEFAULT_MZ_DATA_PATHS = [Path(Path.cwd() / f"{LAT_DATA_DIR}{run_id}.mat").expanduser().resolve() for run_id in DEFAULT_MZ_RUN_IDS]

@@ -8,7 +8,8 @@ from scipy.optimize import least_squares
 from scipy.interpolate import make_smoothing_spline, RegularGridInterpolator
 import numpy as np
 import math
-from ..utils.files import DEFAULT_RUN_ID, DEFAULT_LAT_DATA_PATH, DEFAULT_LAT_SURFACE_PATH, DEFAULT_LAT_COEFFS_PATH, DEFAULT_LAT_MF52_COEFFS_PATH
+from ..utils.files import DEFAULT_RUN_ID, DEFAULT_LAT_DATA_PATH, DEFAULT_LAT_SURFACE_PATH, DEFAULT_LAT_COEFFS_PATH, DEFAULT_LAT_MF52_COEFFS_PATH, DEFAULT_MZ_MF52_COEFFS_PATH, DEFAULT_MZ_DATA_PATHS, DEFAULT_MZ_RUN_TAG
+from ..utils.constants import TIRE_RADIUS
 
 CHANNELS = set(["ET", "FX", "FY", "AMBTMP", "FZ", "IA", "MX", "MZ", "N", "P", "RE", "RL", "RST", "SA", "SL", "SR", "TSTC", "TSTI", "TSTO", "V"])
 FY_SCALING_FACTOR = 0.7
@@ -23,12 +24,31 @@ LAT_MF52_COEFF_NAMES = [
     "pHy1", "pHy2", "pHy3",
     "pVy1", "pVy2", "pVy3", "pVy4"]
 LONG_MF52_COEFF_NAMES = []
+MZ_MF52_COEFF_NAMES = [
+    "qBz1", "qBz2", "qBz3", "qBz4", "qBz5", "qBz9", "qBz10",
+    "qCz1",
+    "qDz1", "qDz2", "qDz3", "qDz4", "qDz6", "qDz7", "qDz8", "qDz9",
+    "qEz1", "qEz2", "qEz3", "qEz4", "qEz5",
+    "qHz1", "qHz2", "qHz3", "qHz4"]
 
 # initial guess / bounds for the 18 lat mf5.2 coeffs (same order as LAT_MF52_COEFF_NAMES)
 LAT_MF52_X0 = [1.4, 2.5, -0.2, 0, 0, 0, 0, 0, -40, 1.5, 0, 0, 0, 0, 0, 0, 0, 0]
 LAT_MF52_LB = [1.0, 0.5, -2, -50, -10, -10, -10, -50, -200, 0.1, -10, -0.1, -0.1, -1, -0.5, -0.5, -5, -5]
 LAT_MF52_UB = [2.0, 5.0, 2, 50, 1, 10, 10, 50, -1, 10, 10, 0.1, 0.1, 1, 0.5, 0.5, 5, 5]
 LAT_MF52_MIN_POINTS = 500
+
+# initial guess / bounds for the 25 mz mf5.2 coeffs (same order as MZ_MF52_COEFF_NAMES)
+MZ_MF52_X0 = [10, 0, 0, 0, 0, 0, 0, 1.2, 0.1, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0]
+# qBz9 >= 0 since mzr only sees |Br|, so (qBz9, qBz10) and (-qBz9, -qBz10) are the same fit
+MZ_MF52_LB = [1, -50, -50, -50, -50, 0, -10, 0.8, 0, -1, -50, -500, -0.5, -0.5, -10, -10, -50, -50, -50, -10, -50, -0.1, -0.1, -5, -5]
+MZ_MF52_UB = [100, 50, 50, 50, 50, 100, 10, 2.5, 1, 1, 50, 500, 0.5, 0.5, 10, 10, 1, 50, 50, 10, 50, 0.1, 0.1, 5, 5]
+MZ_MF52_MIN_POINTS = 500
+# data only has ia >= 0, so qBz4 * ia and qBz5 * |ia| are the same column. hold qBz4 so bt is even in camber
+MZ_MF52_FIXED = {"qBz4": 0.0}
+
+R0 = TIRE_RADIUS # m, unloaded radius, scales mz trail and residual torque
+V_TEST = 40.0 # kph, run8 lat fit speed
+V_TOL = 3.0
 
 SA_RANGE = np.linspace(-14, 14, 300)
 FZ_BUCKETS = [230, 400, 630, 900, 1100]
@@ -37,24 +57,30 @@ P_BUCKETS = [41.3685, 55.1581, 68.9476, 82.7371, 96.5266] # in kPa (when hot) - 
 
 # ordinal blue ramp, light -> heavy load
 LOAD_RAMP = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281"]
+# ordinal orange ramp, 0 -> 4 deg camber
+IA_RAMP = ["#f2a07a", "#eb6834", "#b4471c"]
 
 FZ_TOL = 50
 IA_TOL = 0.5
 P_TOL = 5
 
 class Tire:
-    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_LAT_DATA_PATH, coeffs_path=DEFAULT_LAT_COEFFS_PATH, surface_path=DEFAULT_LAT_SURFACE_PATH, mf52_coeffs_path=DEFAULT_LAT_MF52_COEFFS_PATH):
+    def __init__(self, run_id=DEFAULT_RUN_ID, data_path=DEFAULT_LAT_DATA_PATH, coeffs_path=DEFAULT_LAT_COEFFS_PATH, surface_path=DEFAULT_LAT_SURFACE_PATH, mf52_coeffs_path=DEFAULT_LAT_MF52_COEFFS_PATH, mz_coeffs_path=DEFAULT_MZ_MF52_COEFFS_PATH, mz_data_paths=DEFAULT_MZ_DATA_PATHS):
 
         self.run_id = run_id
         self.data_path = data_path
         self.coeffs_path = coeffs_path
         self.surface_path = surface_path
         self.mf52_coeffs_path = mf52_coeffs_path
+        self.mz_coeffs_path = mz_coeffs_path
+        self.mz_data_paths = mz_data_paths
         self.tire_id_substrings = ["43075", "16x7.5", "8 inch rim"]
 
         self.lat_mf4_coeffs = dict()
         self.lat_mf52_coeffs = dict() # pressure -> {coeff name -> value, "fz0" -> value}
         self.lat_bnp89_coeffs = dict()
+        self.mz_mf52_coeffs = dict() # pressure -> {coeff name -> value, "fz0", "r0" -> value}
+        self.mz_data = None
 
         self.lat_splines = dict()
         self.lat_surface = None
@@ -76,6 +102,12 @@ class Tire:
                 self.save_lat_mf52_coeffs()
 
             self.print_lat_mf52_coeffs()
+
+            if self.mz_coeffs_path.is_file():
+                self.load_mz_mf52_coeffs()
+            else:
+                self.fit_mz_mf52()
+                self.save_mz_mf52_coeffs()
         except Exception as e:
             print("Failed to setup tire object: ", str(e))
 
@@ -131,9 +163,9 @@ class Tire:
 
 
     @staticmethod
-    def _lat_mf52_model(params, alpha, gamma, fz, fz0):
-        """Pure MF5.2 lateral math against an explicit parameter vector.
-        alpha, gamma in radians. Used internally by the fitter."""
+    def _lat_mf52_terms(params, alpha, gamma, fz, fz0):
+        """MF5.2 lateral terms (Cy, Dy, Ey, By, Ky, SHy, SVy, alpha_y) against an
+        explicit parameter vector. alpha, gamma in radians."""
         (pCy1, pDy1, pDy2, pDy3,
         pEy1, pEy2, pEy3, pEy4,
         pKy1, pKy2, pKy3,
@@ -162,8 +194,59 @@ class Tire:
         Ey = (pEy1 + pEy2 * dfz) * (1 - (pEy3 + pEy4 * gamma) * np.sign(alpha_y))
         Ey = np.minimum(Ey, 1.0)
 
+        return Cy, Dy, Ey, By, Ky, SHy, SVy, alpha_y
+
+
+    @staticmethod
+    def _lat_mf52_model(params, alpha, gamma, fz, fz0):
+        """Pure MF5.2 lateral math against an explicit parameter vector.
+        alpha, gamma in radians. Used internally by the fitter."""
+        Cy, Dy, Ey, By, _, _, SVy, alpha_y = Tire._lat_mf52_terms(params, alpha, gamma, fz, fz0)
+
         Bx = By * alpha_y
         return Dy * np.sin(Cy * np.arctan(Bx - Ey * (Bx - np.arctan(Bx)))) + SVy
+
+
+    @staticmethod
+    def _mz_mf52_model(params, lat_params, alpha, gamma, fz, fz0, r0):
+        """Pure MF5.2 aligning moment, Mz = -t * Fy0 + Mzr, on top of the lat fit.
+        alpha, gamma in radians, r0 in m. Same (sae) signs as the data, so a
+        positive trail gives +Mz for the -Fy at +alpha."""
+        (qBz1, qBz2, qBz3, qBz4, qBz5, qBz9, qBz10,
+        qCz1,
+        qDz1, qDz2, qDz3, qDz4, qDz6, qDz7, qDz8, qDz9,
+        qEz1, qEz2, qEz3, qEz4, qEz5,
+        qHz1, qHz2, qHz3, qHz4) = params
+
+        fy0 = Tire._lat_mf52_model(lat_params, alpha, gamma, fz, fz0)
+        Cy, _, _, By, Ky, SHy, SVy, _ = Tire._lat_mf52_terms(lat_params, alpha, gamma, fz, fz0)
+
+        dfz = (fz - fz0) / fz0
+
+        # pneumatic trail
+        SHt = qHz1 + qHz2 * dfz + (qHz3 + qHz4 * dfz) * gamma
+        alpha_t = alpha + SHt
+
+        Bt = (qBz1 + qBz2 * dfz + qBz3 * dfz**2) * (1 + qBz4 * gamma + qBz5 * np.abs(gamma))
+        Ct = qCz1
+        Dt = fz * (qDz1 + qDz2 * dfz) * (1 + qDz3 * gamma + qDz4 * gamma**2) * (r0 / fz0)
+        Et = ((qEz1 + qEz2 * dfz + qEz3 * dfz**2)
+            * (1 + (qEz4 + qEz5 * gamma) * (2 / np.pi) * np.arctan(Bt * Ct * alpha_t)))
+        Et = np.minimum(Et, 1.0)
+
+        Btx = Bt * alpha_t
+        t = Dt * np.cos(Ct * np.arctan(Btx - Et * (Btx - np.arctan(Btx)))) * np.cos(alpha)
+
+        # residual torque
+        SHf = SHy + np.divide(SVy, Ky, out=np.zeros_like(np.asarray(SVy, dtype=float)),
+                              where=np.abs(Ky) > 1e-9)
+        alpha_r = alpha + SHf
+
+        Br = qBz9 + qBz10 * By * Cy
+        Dr = fz * ((qDz6 + qDz7 * dfz) + (qDz8 + qDz9 * dfz) * gamma) * r0
+        Mzr = Dr * np.cos(np.arctan(Br * alpha_r)) * np.cos(alpha)
+
+        return -t * fy0 + Mzr
 
 
     def _eval_lat_mf52(self, alpha, gamma, fz, p):
@@ -172,6 +255,16 @@ class Tire:
         c = self.lat_mf52_coeffs[p_fit]
         params = [c[name] for name in LAT_MF52_COEFF_NAMES]
         return self._lat_mf52_model(params, np.deg2rad(alpha), np.deg2rad(gamma), fz, c["fz0"])
+
+
+    def _eval_mz_mf52(self, alpha, gamma, fz, p):
+        # alpha, gamma in deg, fz in N (positive), p in kPa -> unscaled mz in Nm, paired with the lat fit at the same pressure
+        p_fit = min(self.mz_mf52_coeffs, key=lambda k: abs(k - p))
+        c = self.mz_mf52_coeffs[p_fit]
+        lat = self.lat_mf52_coeffs[p_fit]
+        params = [c[name] for name in MZ_MF52_COEFF_NAMES]
+        lat_params = [lat[name] for name in LAT_MF52_COEFF_NAMES]
+        return self._mz_mf52_model(params, lat_params, np.deg2rad(alpha), np.deg2rad(gamma), fz, c["fz0"], c["r0"])
 
 
     def calculate_lat_force_mf52(self, alpha, gamma, fz, p):
@@ -260,6 +353,47 @@ class Tire:
             print(f"rms error = {c['rms']:.1f} N")
             print(f"FNOMIN = {c['fz0']:.1f}")
             for name in LAT_MF52_COEFF_NAMES:
+                print(f"{name.upper():<6} = {c[name]: .6e}")
+
+
+    def load_mz_mf52_coeffs(self):
+        if self.mz_coeffs_path is None or not self.mz_coeffs_path.exists():
+            raise FileNotFoundError(f"Tire coefficient file not found: {self.mz_coeffs_path}")
+
+        mat = loadmat(self.mz_coeffs_path)
+        names = [str(n).strip() for n in mat["coeff_names"]]
+        r0 = float(np.asarray(mat["r0"]).item())
+
+        self.mz_mf52_coeffs = dict()
+        for p, fz0, rms, values in zip(mat["pressures"].ravel(), mat["fz0"].ravel(), mat["rms"].ravel(), np.atleast_2d(mat["coeff_values"])):
+            coeffs = dict(zip(names, values.astype(float)))
+            coeffs["fz0"] = float(fz0)
+            coeffs["rms"] = float(rms)
+            coeffs["r0"] = r0
+            self.mz_mf52_coeffs[float(p)] = coeffs
+
+
+    def save_mz_mf52_coeffs(self):
+        pressures = sorted(self.mz_mf52_coeffs)
+        savemat(self.mz_coeffs_path, {
+            "coeff_names": MZ_MF52_COEFF_NAMES,
+            "pressures": np.array(pressures),
+            "fz0": np.array([self.mz_mf52_coeffs[p]["fz0"] for p in pressures]),
+            "rms": np.array([self.mz_mf52_coeffs[p]["rms"] for p in pressures]),
+            "r0": self.mz_mf52_coeffs[pressures[0]]["r0"],
+            "coeff_values": np.array([[self.mz_mf52_coeffs[p][n] for n in MZ_MF52_COEFF_NAMES] for p in pressures]),
+        })
+
+
+    def print_mz_mf52_coeffs(self):
+        # .tir style names, same units / conventions as the lat print, only valid with the lat coeffs at that pressure
+        for p in sorted(self.mz_mf52_coeffs):
+            c = self.mz_mf52_coeffs[p]
+            print(f"\n[{DEFAULT_MZ_RUN_TAG}] mf5.2 aligning coeffs @ P = {p:g} kPa ({p / 6.89476:.0f} psi)")
+            print(f"rms error = {c['rms']:.2f} Nm")
+            print(f"FNOMIN = {c['fz0']:.1f}")
+            print(f"UNLOADED_RADIUS = {c['r0']:.4f}")
+            for name in MZ_MF52_COEFF_NAMES:
                 print(f"{name.upper():<6} = {c[name]: .6e}")
 
     # ---------- For Data Management ----------
@@ -373,6 +507,31 @@ class Tire:
 
         # Remove hysteresis
         self.run_data = _avg_sa_hysteresis(self.run_data)
+
+
+    def load_mz_data(self):
+        # each mz run cleaned on its own (et restarts per file) then stacked, only at the lat fit speed.
+        # kept out of run_data so the lat plots / tuner still only see run8
+        runs = []
+        for path in self.mz_data_paths:
+            run = Tire(run_id=Path(path).stem, data_path=path)
+            run.tire_id_substrings = self.tire_id_substrings
+            if run.load_data() is None:
+                continue
+
+            at_speed = np.abs(run.run_data["V"] - V_TEST) < V_TOL
+            if not at_speed.any():
+                continue
+
+            run.run_data = {ch: v[at_speed] for ch, v in run.run_data.items()}
+            run.process_data()
+            runs.append(run.run_data)
+
+        if not runs:
+            raise ValueError(f"No usable mz runs in {self.mz_data_paths}")
+
+        self.mz_data = {ch: np.concatenate([r[ch] for r in runs]) for ch in runs[0]}
+        return self.mz_data
 
 
     # ---------- For Plotting ----------
@@ -543,6 +702,64 @@ class Tire:
         fig.savefig(Path(Path.cwd() / f"figures/tyres/{category}/[{self.run_id}] {title}.png").expanduser().resolve())
 
 
+    def plot_mz_over_sa_per_fz(self, category, title, fz_buckets, ia, p):
+        if self.mz_data is None:
+            self.load_mz_data()
+        d = self.mz_data
+
+        fig, ax = plt.subplots(figsize=(9, 6))
+        colors = [LOAD_RAMP[i] for i in np.linspace(0, len(LOAD_RAMP) - 1, len(fz_buckets)).round().astype(int)]
+
+        for j, curr_fz in enumerate(fz_buckets):
+            idx = (np.abs(d["FZ"] - curr_fz) < FZ_TOL) & (np.abs(d["IA"] - ia) < IA_TOL) & (np.abs(d["P"] - p) < P_TOL)
+            if idx.any():
+                ax.scatter(d["SA"][idx], d["MZ"][idx], s=5, color=colors[j], alpha=0.35)
+
+            mz_pred = self._eval_mz_mf52(SA_RANGE, ia, curr_fz, p)
+            ax.plot(SA_RANGE, mz_pred, color=colors[j], linewidth=2, label=f"F_Z = {curr_fz:g} N")
+
+        ax.axhline(0, linestyle="--", color="k", alpha=0.25)
+        ax.axvline(0, linestyle="--", color="k", alpha=0.25)
+        ax.set_xlabel("slip angle  α  [deg]")
+        ax.set_ylabel("aligning moment  M_Z  [Nm]")
+        ax.set_title(f"Mz VS SA @ IA = {ia}, P = {p} (lines = mf5.2, dots = run8 + run9)")
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(Path(Path.cwd() / f"figures/tyres/{category}/[{DEFAULT_MZ_RUN_TAG}] {title} @ IA = {ia}, P = {p}.png").expanduser().resolve())
+        plt.close(fig)
+
+
+    def plot_mz_over_sa_per_ia(self, category, title, fz, ia_buckets, p):
+        if self.mz_data is None:
+            self.load_mz_data()
+        d = self.mz_data
+
+        fig, ax = plt.subplots(figsize=(9, 6))
+        colors = [IA_RAMP[i] for i in np.linspace(0, len(IA_RAMP) - 1, len(ia_buckets)).round().astype(int)]
+
+        for j, curr_ia in enumerate(ia_buckets):
+            idx = (np.abs(d["FZ"] - fz) < FZ_TOL) & (np.abs(d["IA"] - curr_ia) < IA_TOL) & (np.abs(d["P"] - p) < P_TOL)
+            if idx.any():
+                ax.scatter(d["SA"][idx], d["MZ"][idx], s=5, color=colors[j], alpha=0.35)
+
+            mz_pred = self._eval_mz_mf52(SA_RANGE, curr_ia, fz, p)
+            ax.plot(SA_RANGE, mz_pred, color=colors[j], linewidth=2, label=f"IA = {curr_ia:g} deg")
+
+        ax.axhline(0, linestyle="--", color="k", alpha=0.25)
+        ax.axvline(0, linestyle="--", color="k", alpha=0.25)
+        ax.set_xlabel("slip angle  α  [deg]")
+        ax.set_ylabel("aligning moment  M_Z  [Nm]")
+        ax.set_title(f"Mz VS SA @ FZ = {fz}, P = {p} (lines = mf5.2, dots = run8 + run9)")
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(Path(Path.cwd() / f"figures/tyres/{category}/[{DEFAULT_MZ_RUN_TAG}] {title} @ FZ = {fz}, P = {p}.png").expanduser().resolve())
+        plt.close(fig)
+
+
 
     # ---------- Fitting Coefficients ----------
 
@@ -577,6 +794,64 @@ class Tire:
             raise ValueError("Not enough points to construct an mf5.2 fit")
 
         return self.lat_mf52_coeffs
+
+
+    def fit_mz_mf52(self, pressures=P_BUCKETS):
+        # fits all 25 mf5.2 aligning coeffs per tested pressure on top of the lat fit there,
+        # so refit whenever the lat coeffs change
+        if not self.lat_mf52_coeffs:
+            raise ValueError("Need the lat mf5.2 coeffs before fitting mz")
+        if self.mz_data is None:
+            self.load_mz_data()
+
+        d = self.mz_data
+        self.mz_mf52_coeffs = dict()
+
+        free = np.array([n not in MZ_MF52_FIXED for n in MZ_MF52_COEFF_NAMES])
+        x_fixed = np.array([MZ_MF52_FIXED.get(n, 0.0) for n in MZ_MF52_COEFF_NAMES])
+
+        def expand(x):
+            full = x_fixed.copy()
+            full[free] = x
+            return full
+
+        for p in pressures:
+            idx = np.abs(d["P"] - p) < P_TOL
+            if idx.sum() < MZ_MF52_MIN_POINTS:
+                continue
+
+            p_lat = min(self.lat_mf52_coeffs, key=lambda k: abs(k - p))
+            if abs(p_lat - p) > P_TOL:
+                print(f"No lat mf5.2 fit at P = {p:g} kPa, skipping mz there ({idx.sum()} pts)")
+                continue
+
+            lat = self.lat_mf52_coeffs[p_lat]
+            lat_params = [lat[n] for n in LAT_MF52_COEFF_NAMES]
+
+            alpha = np.deg2rad(d["SA"][idx])
+            gamma = np.deg2rad(d["IA"][idx])
+            fz = d["FZ"][idx]
+            mz = d["MZ"][idx]
+            fz0 = lat["fz0"]
+
+            result = least_squares(
+                lambda x: self._mz_mf52_model(expand(x), lat_params, alpha, gamma, fz, fz0, R0) - mz,
+                np.array(MZ_MF52_X0)[free], bounds=(np.array(MZ_MF52_LB)[free], np.array(MZ_MF52_UB)[free]),
+                x_scale="jac", loss="soft_l1", f_scale=2, max_nfev=20000)
+
+            params = expand(result.x)
+            resid = self._mz_mf52_model(params, lat_params, alpha, gamma, fz, fz0, R0) - mz
+
+            coeffs = dict(zip(MZ_MF52_COEFF_NAMES, params))
+            coeffs["fz0"] = fz0
+            coeffs["rms"] = float(np.sqrt(np.mean(resid**2)))
+            coeffs["r0"] = R0
+            self.mz_mf52_coeffs[float(p_lat)] = coeffs
+
+        if not self.mz_mf52_coeffs:
+            raise ValueError("Not enough points to construct an mf5.2 mz fit")
+
+        return self.mz_mf52_coeffs
 
 
     def fit_lat_spline(self):
@@ -674,3 +949,8 @@ if __name__ == "__main__":
     tire.plot_fy_over_sa_per_ia("lateral", "Fy vs SA per IA", 1000, [0, 1], 82.7371)
     tire.plot_fy_over_sa_per_p("lateral", "Fy VS SA per P", 1000, 1.5, P_BUCKETS)
     tire.plot_peak_mu_over_ia("lateral", "Peak mu vs IA per Fz", [220, 440, 665, 890, 1110], sorted(tire.lat_mf52_coeffs))
+
+    tire.print_mz_mf52_coeffs()
+    for p in sorted(tire.mz_mf52_coeffs):
+        tire.plot_mz_over_sa_per_fz("aligning", "Mz vs SA per Fz", [220, 440, 670, 890, 1110], 0, p)
+    tire.plot_mz_over_sa_per_ia("aligning", "Mz vs SA per IA", 670, IA_BUCKETS, 82.7371)
