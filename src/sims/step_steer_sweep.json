@@ -1,0 +1,37 @@
+{
+  "_note": "Config for step_steer_sweep.py. Run 'python step_steer_sweep.py --schema' first and set simulation_type to ARD's step steer type; the runner refuses to start if ARD doesn't recognise it.",
+
+  "simulation_type": "step_steer",
+
+  "name_prefix": "Auto Step Steer",
+  "interval_seconds": 60,
+  "poll_seconds": 15,
+  "max_wait_seconds": 21600,
+  "max_cycles": null,
+  "max_parallel": 1,
+  "skip_if_vehicle_unchanged": true,
+  "cancel_on_stop": false,
+
+  "_preset_note": "Easiest route: save a step steer run's settings as a config in the app, then name it in simulation_config_preset. It replaces simulation_config below.",
+  "defaults": {
+    "vehicle_name": "My Car",
+    "use_current_vehicle": false,
+    "simulation_config_preset": "My step steer",
+    "request": {
+      "ambient_conditions": { "id": 1 },
+      "simulation_config": {},
+      "sweep_parameters": []
+    }
+  },
+
+  "sweeps": [
+    {
+      "label": "Step steer - Dampers",
+      "request": { "sweep_parameters": [] }
+    },
+    {
+      "label": "Step steer - ARB",
+      "request": { "sweep_parameters": [] }
+    }
+  ]
+}

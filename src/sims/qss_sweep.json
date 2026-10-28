@@ -1,0 +1,45 @@
+{
+  "_note": "Config for qss_sweep.py. Keys starting with _ are ignored. Check field names with: python qss_sweep.py --schema",
+
+  "name_prefix": "Auto QSS",
+  "interval_seconds": 60,
+  "poll_seconds": 15,
+  "max_wait_seconds": 21600,
+  "max_cycles": null,
+  "max_parallel": 1,
+  "skip_if_vehicle_unchanged": true,
+  "cancel_on_stop": false,
+
+  "_defaults_note": "Every sweep starts from 'defaults'. Objects merge key by key; lists like sweep_parameters are replaced whole.",
+  "defaults": {
+    "vehicle_name": "My Car",
+    "use_current_vehicle": false,
+    "request": {
+      "track": { "id": 1 },
+      "ambient_conditions": { "id": 1 },
+      "simulation_config": { "flying_lap": true, "lap_count": 1 },
+      "sweep_parameters": []
+    }
+  },
+
+  "_sweeps_note": "Unique label per sweep. Use sweep_preset / simulation_config_preset to pull settings saved in the app by name (see --list-presets). enabled: false skips one.",
+  "sweeps": [
+    {
+      "label": "Springs - Track 1",
+      "sweep_preset": "My spring sweep"
+    },
+    {
+      "label": "Aero - Track 2",
+      "request": {
+        "track": { "id": 2 },
+        "sweep_parameters": []
+      }
+    },
+    {
+      "label": "Springs - Track 1 - Hot day",
+      "enabled": false,
+      "sweep_preset": "My spring sweep",
+      "request": { "ambient_conditions": { "id": 3 } }
+    }
+  ]
+}

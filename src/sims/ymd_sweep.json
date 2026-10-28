@@ -1,0 +1,52 @@
+{
+  "_note": "Config for ymd_sweep.py. YMD doesn't need a track. simulation_config below follows ARD's YMD API example; check with --schema or the API docs.",
+
+  "name_prefix": "Auto YMD",
+  "interval_seconds": 60,
+  "poll_seconds": 15,
+  "max_wait_seconds": 21600,
+  "max_cycles": null,
+  "max_parallel": 1,
+  "skip_if_vehicle_unchanged": true,
+  "cancel_on_stop": false,
+
+  "defaults": {
+    "vehicle_name": "My Car",
+    "use_current_vehicle": false,
+    "request": {
+      "ambient_conditions": { "id": 1 },
+      "_config_note": "Beta = body slip range (deg), Delta = steer range (deg), lines/steps = grid density, velocity = test speed.",
+      "simulation_config": {
+        "Beta": { "min": -5, "max": 5 },
+        "Delta": { "min": -5, "max": 5 },
+        "lines": 10,
+        "steps": 100,
+        "velocity": 45,
+        "circuit_closed": true
+      },
+      "sweep_parameters": []
+    }
+  },
+
+  "sweeps": [
+    {
+      "label": "YMD 45 - ARB",
+      "request": { "sweep_parameters": [] }
+    },
+    {
+      "label": "YMD 25 - ARB",
+      "request": {
+        "simulation_config": { "velocity": 25 },
+        "sweep_parameters": []
+      }
+    },
+    {
+      "label": "YMD 45 - Wide slip",
+      "enabled": false,
+      "request": {
+        "simulation_config": { "Beta": { "min": -10, "max": 10 }, "Delta": { "min": -10, "max": 10 } },
+        "sweep_parameters": []
+      }
+    }
+  ]
+}
